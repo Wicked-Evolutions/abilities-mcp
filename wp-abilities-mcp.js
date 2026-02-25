@@ -89,6 +89,7 @@ let clientProtocolVersion = null;
 let initHandshakeComplete = false;
 
 // Queue for messages that arrive before the default transport is ready
+const MAX_EARLY_QUEUE = 50;
 let earlyQueue = [];
 
 // ---------------------------------------------------------------------------
@@ -122,8 +123,7 @@ function handleClientMessage(line) {
   try {
     msg = JSON.parse(line);
   } catch (e) {
-    // Not JSON — forward to default transport
-    if (defaultTransport) defaultTransport.send(line);
+    log(`Non-JSON from client (dropped): ${line.substring(0, 200)}`);
     return;
   }
 
@@ -143,12 +143,8 @@ function handleClientMessage(line) {
   // Cache initialized notification
   if (msg.method === 'initialized' || msg.method === 'notifications/initialized') {
     cachedInitNotification = msg;
-    // After handshake, cache for pool and mark ready
-    setTimeout(() => {
-      initHandshakeComplete = true;
-      pool.setHandshakeCache(cachedInitRequest, cachedInitNotification, clientProtocolVersion);
-      drainEarlyQueue();
-    }, 100);
+    initHandshakeComplete = true;
+    pool.setHandshakeCache(cachedInitRequest, cachedInitNotification, clientProtocolVersion);
     forwardToDefault(line);
     return;
   }
@@ -190,6 +186,19 @@ function forwardToDefault(line) {
   if (defaultTransport) {
     defaultTransport.send(line);
   } else {
+    if (earlyQueue.length >= MAX_EARLY_QUEUE) {
+      log('Early queue full — rejecting message');
+      try {
+        const msg = JSON.parse(line);
+        if (msg.id !== undefined) {
+          sendToClient(JSON.stringify({
+            jsonrpc: '2.0', id: msg.id,
+            error: { code: -32603, message: 'Server not ready — queue full' }
+          }));
+        }
+      } catch (e) { /* non-JSON, drop */ }
+      return;
+    }
     earlyQueue.push(line);
   }
 }
@@ -256,8 +265,7 @@ async function handleToolsCall(msg) {
 
 function handleTransportMessage(parsedMsg, rawLine) {
   if (!parsedMsg) {
-    // Non-JSON line — forward as-is
-    if (rawLine) process.stdout.write(rawLine + '\n');
+    if (rawLine) log(`Non-JSON from transport (dropped): ${rawLine.substring(0, 200)}`);
     return;
   }
 
@@ -344,6 +352,7 @@ function sendToClient(data) {
       handleTransportMessage(parsedMsg, rawLine);
     });
     log(`Default transport connected: ${config.defaultSite}`);
+    drainEarlyQueue();
   } catch (err) {
     process.stderr.write(`wp-abilities-mcp: Failed to connect to default site: ${err.message}\n`);
     process.exit(1);
