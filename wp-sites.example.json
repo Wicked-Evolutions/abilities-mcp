@@ -1,0 +1,40 @@
+{
+  "defaultSite": "mysite",
+  "sites": {
+    "mysite": {
+      "label": "My WordPress Site",
+      "url": "https://example.com",
+      "transport": "ssh",
+      "ssh": {
+        "host": "my-ssh-host",
+        "path": "~/public_html",
+        "user": "wpaiagent"
+      }
+    },
+    "staging": {
+      "label": "Staging Site",
+      "url": "https://staging.example.com",
+      "transport": "http",
+      "http": {
+        "endpoint": "https://staging.example.com/wp-json/mcp/mcp-adapter-default-server",
+        "username": "mcp-agent",
+        "password": "xxxx xxxx xxxx xxxx"
+      }
+    },
+    "network": {
+      "label": "WordPress Multisite",
+      "url": "https://network.example.com",
+      "transport": "ssh",
+      "ssh": {
+        "host": "my-ssh-host",
+        "path": "~/domains/network.example.com/public_html",
+        "user": "wpaiagent"
+      },
+      "multisite": {
+        "main": "https://network.example.com/",
+        "blog": "https://blog.network.example.com/",
+        "shop": "https://shop.network.example.com/"
+      }
+    }
+  }
+}

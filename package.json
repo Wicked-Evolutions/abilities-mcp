@@ -1,0 +1,19 @@
+{
+  "name": "@influencentricity/wp-abilities-mcp",
+  "version": "1.0.0",
+  "description": "One MCP to Rule Your WordPress World — unified multi-site bridge for WordPress abilities",
+  "main": "wp-abilities-mcp.js",
+  "bin": {
+    "wp-abilities-mcp": "./wp-abilities-mcp.js"
+  },
+  "keywords": ["mcp", "wordpress", "ssh", "bridge", "claude", "abilities", "multi-site"],
+  "license": "GPL-2.0-or-later",
+  "author": "Influencentricity",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Influencentricity/wp-abilities-mcp.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
