@@ -27,6 +27,7 @@ const { ConnectionPool } = require('./lib/connection-pool');
 const { sanitizeToolsList, isToolsListResponse } = require('./lib/sanitizer');
 const { injectSiteParam, extractSiteParam } = require('./lib/tool-injector');
 const { SshTransport } = require('./lib/transports/ssh-transport');
+const { ToolCatalog } = require('./lib/tool-catalog');
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -77,6 +78,61 @@ log(`Config loaded: ${siteKeys.length} site(s): ${siteKeys.join(', ')} (default:
 log(`Multi-site mode: ${isMultiSite}`);
 
 const pool = new ConnectionPool(config, log);
+const catalog = new ToolCatalog(config, log);
+
+if (catalog.isEnabled()) {
+  log('Tool filtering enabled');
+} else {
+  log('Tool filtering disabled (no toolFilter in config or enabled: false)');
+}
+
+// ---------------------------------------------------------------------------
+// Synthetic bridge tools (handled locally, never forwarded to WordPress)
+// ---------------------------------------------------------------------------
+
+const BRIDGE_TOOLS = [
+  {
+    name: 'wp_bridge_health',
+    description: 'Check connectivity status of all configured WordPress sites. Returns status (connected/reachable/unreachable) and latency for each site.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        site: {
+          type: 'string',
+          description: 'Optional: check only this site. Omit to check all configured sites.',
+        },
+      },
+    },
+  },
+  {
+    name: 'wp_browse_tools',
+    description: 'List available WordPress tool categories with tool counts. Shows which categories are currently loaded. Use wp_load_tools to activate categories.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'wp_load_tools',
+    description: 'Activate WordPress tool categories to make their tools available. After loading, the tools list is automatically refreshed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        categories: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Category names to activate (e.g. ["fluent-crm", "content", "media"]). Use wp_browse_tools to see available categories.',
+        },
+        deactivate: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: category names to deactivate (unload from the tools list).',
+        },
+      },
+      required: ['categories'],
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // State
@@ -155,8 +211,12 @@ function handleClientMessage(line) {
     return;
   }
 
-  // tools/call — extract site, route to correct transport
+  // tools/call — check for bridge tools first, then route
   if (msg.method === 'tools/call') {
+    if (msg.params && isBridgeTool(msg.params.name)) {
+      handleBridgeToolCall(msg);
+      return;
+    }
     handleToolsCall(msg);
     return;
   }
@@ -211,6 +271,142 @@ function drainEarlyQueue() {
   for (const line of queued) {
     if (defaultTransport) defaultTransport.send(line);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Bridge tool helpers
+// ---------------------------------------------------------------------------
+
+const BRIDGE_TOOL_NAMES = new Set(BRIDGE_TOOLS.map(t => t.name));
+
+function isBridgeTool(name) {
+  return BRIDGE_TOOL_NAMES.has(name);
+}
+
+function injectBridgeTools(msg) {
+  if (!msg.result || !Array.isArray(msg.result.tools)) return;
+  for (const tool of BRIDGE_TOOLS) {
+    msg.result.tools.push(tool);
+  }
+}
+
+async function handleBridgeToolCall(msg) {
+  const toolName = msg.params.name;
+  const toolArgs = msg.params.arguments || {};
+
+  if (toolName === 'wp_bridge_health') {
+    const keysToCheck = toolArgs.site ? [toolArgs.site] : siteKeys;
+    const lines = [];
+
+    for (const key of keysToCheck) {
+      try {
+        const result = await pool.healthCheck(key);
+        let line = `${key}: ${result.status} (${result.latencyMs}ms)`;
+        if (result.error) line += ` — ${result.error}`;
+        lines.push(line);
+      } catch (err) {
+        lines.push(`${key}: error — ${err.message}`);
+      }
+    }
+
+    sendToClient(JSON.stringify({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: {
+        content: [{ type: 'text', text: lines.join('\n') }],
+      },
+    }));
+    return;
+  }
+
+  if (toolName === 'wp_browse_tools') {
+    if (!catalog.isEnabled() || !catalog.fullTools) {
+      sendToClient(JSON.stringify({
+        jsonrpc: '2.0', id: msg.id,
+        result: {
+          content: [{ type: 'text', text: 'Tool filtering is not enabled or tools have not been loaded yet.' }],
+        },
+      }));
+      return;
+    }
+
+    const summary = catalog.getCategorySummary();
+    const lines = summary.map(c =>
+      `${c.active ? '[LOADED]' : '       '} ${c.name} (${c.toolCount} tools)`
+    );
+    lines.push('');
+    lines.push(`Total: ${catalog.fullTools.length} tools in ${summary.length} categories`);
+    lines.push(`Loaded: ${summary.filter(c => c.active).reduce((n, c) => n + c.toolCount, 0)} tools`);
+    lines.push('');
+    lines.push('Use wp_load_tools with categories array to activate.');
+
+    sendToClient(JSON.stringify({
+      jsonrpc: '2.0', id: msg.id,
+      result: {
+        content: [{ type: 'text', text: lines.join('\n') }],
+      },
+    }));
+    return;
+  }
+
+  if (toolName === 'wp_load_tools') {
+    if (!catalog.isEnabled() || !catalog.fullTools) {
+      sendToClient(JSON.stringify({
+        jsonrpc: '2.0', id: msg.id,
+        result: {
+          content: [{ type: 'text', text: 'Tool filtering is not enabled or tools have not been loaded yet.' }],
+        },
+      }));
+      return;
+    }
+
+    const toActivate = toolArgs.categories || [];
+    const toDeactivate = toolArgs.deactivate || [];
+
+    if (toDeactivate.length > 0) {
+      catalog.deactivateCategories(toDeactivate);
+    }
+
+    const activated = catalog.activateCategories(toActivate);
+    const lines = [];
+
+    if (activated.length > 0) {
+      lines.push(`Activated: ${activated.join(', ')}`);
+    }
+    if (toDeactivate.length > 0) {
+      lines.push(`Deactivated: ${toDeactivate.join(', ')}`);
+    }
+    if (activated.length === 0 && toDeactivate.length === 0) {
+      lines.push('No changes — categories may already be active or not found.');
+    }
+
+    const filtered = catalog.getFilteredTools();
+    lines.push(`Tools now available: ${filtered.length}/${catalog.fullTools.length}`);
+
+    sendToClient(JSON.stringify({
+      jsonrpc: '2.0', id: msg.id,
+      result: {
+        content: [{ type: 'text', text: lines.join('\n') }],
+      },
+    }));
+
+    // Notify client that tools list has changed so it re-fetches
+    if (activated.length > 0 || toDeactivate.length > 0) {
+      sendToClient(JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'notifications/tools/list_changed',
+      }));
+      log(`Sent tools/list_changed notification (activated: ${activated.join(',')})`);
+    }
+    return;
+  }
+
+  // Unknown bridge tool — should not happen
+  sendToClient(JSON.stringify({
+    jsonrpc: '2.0',
+    id: msg.id,
+    error: { code: -32601, message: `Unknown bridge tool: ${toolName}` },
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +468,16 @@ function handleTransportMessage(parsedMsg, rawLine) {
   // Sanitize tools/list responses
   if (isToolsListResponse(parsedMsg)) {
     sanitizeToolsList(parsedMsg);
+
+    // Cache full tools list in catalog (before filtering)
+    if (catalog.isEnabled() && parsedMsg.result && parsedMsg.result.tools) {
+      catalog.cacheTools(parsedMsg.result.tools);
+      // Replace with filtered list
+      parsedMsg.result.tools = catalog.getFilteredTools();
+    }
+
+    // Inject bridge tools
+    injectBridgeTools(parsedMsg);
     // Inject site param if multi-site mode
     if (isMultiSite) {
       injectSiteParam(parsedMsg, siteKeys, config.defaultSite);
