@@ -9,7 +9,8 @@ Unified multi-site MCP bridge for WordPress Abilities API. Replaces separate per
 - **Multi-site routing** — Single MCP server serves all your WordPress sites
 - **Site parameter injection** — LLM sees a `site` enum on every tool, defaults to your primary site
 - **Lazy connections** — Sites connect on first use, not at startup
-- **SSH + HTTP transports** — SSH via WP-CLI, HTTP via Application Passwords
+- **HTTP transport (primary)** — HTTP via Application Passwords with session management
+- **SSH transport (legacy)** — SSH via WP-CLI, kept for backward compatibility
 - **WordPress multisite** — Subdomain/subdirectory multisites via dot notation (`wicked.community`)
 - **Auto-reconnect** — Exponential backoff, healthcheck pings, session recovery
 - **Zero dependencies** — Node.js built-in modules only
@@ -103,6 +104,38 @@ For WordPress multisites, add a `multisite` object mapping subsite keys to their
 
 Use dot notation to target subsites: `"site": "wicked.community"`
 
+### Secure password storage
+
+Instead of plaintext passwords, use `passwordCommand` to read from your OS keychain:
+
+```json
+{
+  "transport": "http",
+  "http": {
+    "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+    "username": "mcp-agent",
+    "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
+  }
+}
+```
+
+Also supported: `passwordEnv` to read from an environment variable.
+
+## Bridge Tools
+
+The bridge provides three built-in tools (not forwarded to WordPress):
+
+| Tool | Description |
+|------|-------------|
+| `wp_bridge_health` | Check connectivity status of all configured WordPress sites |
+| `wp_browse_tools` | List WordPress tool categories with counts (requires `toolFilter.enabled: true`) |
+| `wp_load_tools` | Activate/deactivate tool categories for lazy loading |
+
+## Known Limitations
+
+- **Multisite blog_id switching** ([#3](https://github.com/Influencentricity/wp-abilities-mcp/issues/3)) — Subsite content queries may return main site data. WordPress boots into blog 1 and the ability registry doesn't rebuild after `switch_to_blog()`.
+- **Tool registration** ([#5](https://github.com/Influencentricity/wp-abilities-mcp/issues/5)) — In some configurations, the bridge connects but registers zero tools. Under investigation.
+
 ## Usage
 
 ### Multi-site mode
@@ -165,7 +198,7 @@ helena    wicked    wicked.community
 ## Requirements
 
 - Node.js >= 18
-- WordPress sites with [Abilities Suite](https://github.com/flavflavor) and [MCP Adapter](https://github.com/flavor) installed
+- WordPress sites with [Abilities Suite for WordPress](https://github.com/Influencentricity/abilities-suite-for-wordpress) and [MCP Adapter for WordPress](https://github.com/Influencentricity/mcp-adapter-for-wordpress) installed
 - SSH access (for SSH transport) or Application Passwords (for HTTP transport)
 
 ## License
