@@ -3,11 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- Fix multisite blog_id not switching for subsite queries — build per-subsite endpoint URLs so WordPress boots into the correct blog context natively (#3)
 - Fix tool registration failure in Claude Code — strip `annotations` field (MCP spec 2025-03-26) and rewrite `protocolVersion` in HTTP transport responses (#5)
 - Fix HTTP multisite session loss — reuse existing transport for same-endpoint subsites instead of creating competing connections (#1, PR #2)
 
 ### Known Issues
-- Multisite blog_id not switching for subsite content queries (#3)
 - Session lock contention with concurrent bridge instances (#4) — server-side MySQL GET_LOCK fix deployed to wp-mcp-adapter, bridge-side behaviour unverified
 
 ## [1.0.0] - 2026-02-26
