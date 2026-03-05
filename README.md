@@ -134,7 +134,7 @@ The bridge provides three built-in tools (not forwarded to WordPress):
 ## Known Limitations
 
 - **Multisite blog_id switching** ([#3](https://github.com/Influencentricity/wp-abilities-mcp/issues/3)) — Subsite content queries may return main site data. WordPress boots into blog 1 and the ability registry doesn't rebuild after `switch_to_blog()`.
-- **Tool registration** ([#5](https://github.com/Influencentricity/wp-abilities-mcp/issues/5)) — In some configurations, the bridge connects but registers zero tools. Under investigation.
+- ~~**Tool registration** ([#5](https://github.com/Influencentricity/wp-abilities-mcp/issues/5))~~ — **Fixed.** Root cause was `annotations` field (MCP spec 2025-03-26) and `protocolVersion` mismatch in HTTP responses. The sanitizer now strips annotations and rewrites protocol version.
 
 ## Usage
 
