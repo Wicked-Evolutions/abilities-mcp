@@ -1,14 +1,28 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.0] - 2026-03-08
+
+### Added
+- Permission metadata passthrough — sanitizer preserves `permission` and `enabled` annotation fields from MCP Adapter
+- `[DISABLED]` label injection — tools with `enabled: false` get description suffix showing required permission level
+- Annotation whitelisting — keeps MCP-compliant fields (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, `title`, `permission`, `enabled`), strips non-standard fields
+- Automated test suite using `node:test` (18 sanitizer tests)
+- `.npmignore` for clean package publishing
+- `.nvmrc` targeting Node 20
+- `npm test` script in package.json
 
 ### Fixed
 - Fix multisite blog_id not switching for subsite queries — build per-subsite endpoint URLs so WordPress boots into the correct blog context natively (#3)
-- Fix tool registration failure in Claude Code — strip `annotations` field (MCP spec 2025-03-26) and rewrite `protocolVersion` in HTTP transport responses (#5)
+- Fix tool registration failure in Claude Code — strip non-standard annotation fields while preserving MCP-compliant ones (#5)
 - Fix HTTP multisite session loss — reuse existing transport for same-endpoint subsites instead of creating competing connections (#1, PR #2)
 
+### Changed
+- README updated: architecture diagram shows HTTP as primary transport, SSH marked as legacy
+- Example config (`wp-sites.example.json`) defaults to HTTP with `passwordCommand`
+- Manual test files moved to `test/manual/`
+
 ### Known Issues
-- Session lock contention with concurrent bridge instances (#4) — server-side MySQL GET_LOCK fix deployed to wp-mcp-adapter, bridge-side behaviour unverified
+- Session lock contention with concurrent bridge instances (#4) — server-side MySQL GET_LOCK fix deployed, bridge-side auto-recovery adds ~200ms latency
 
 ## [1.0.0] - 2026-02-26
 

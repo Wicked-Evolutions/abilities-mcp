@@ -1,0 +1,15 @@
+# Development files
+test/
+test-bridge.js
+test-session.js
+.git/
+.github/
+
+# Config (users create their own)
+wp-sites.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

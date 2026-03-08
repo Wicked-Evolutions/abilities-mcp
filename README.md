@@ -55,24 +55,25 @@ node wp-abilities-mcp.js --register
 
 ```json
 {
-  "defaultSite": "helena",
+  "defaultSite": "mysite",
   "sites": {
-    "helena": {
-      "label": "Helena Willow",
-      "url": "https://helenawillow.com",
-      "transport": "ssh",
-      "ssh": {
-        "host": "hostinger-web",
-        "path": "~/domains/helenawillow.com/public_html",
-        "user": "wp_ai_agent_editor_v01"
-      }
-    },
-    "staging": {
+    "mysite": {
+      "label": "My WordPress Site",
+      "url": "https://example.com",
       "transport": "http",
       "http": {
-        "endpoint": "https://staging.example.com/wp-json/mcp/mcp-adapter-default-server",
+        "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
         "username": "mcp-agent",
-        "password": "xxxx xxxx xxxx xxxx"
+        "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
+      }
+    },
+    "legacy-ssh": {
+      "label": "SSH Site (legacy)",
+      "transport": "ssh",
+      "ssh": {
+        "host": "my-ssh-host",
+        "path": "~/public_html",
+        "user": "wpaiagent"
       }
     }
   }
@@ -133,8 +134,9 @@ The bridge provides three built-in tools (not forwarded to WordPress):
 
 ## Known Limitations
 
-- **Multisite blog_id switching** ([#3](https://github.com/Influencentricity/wp-abilities-mcp/issues/3)) — Subsite content queries may return main site data. WordPress boots into blog 1 and the ability registry doesn't rebuild after `switch_to_blog()`.
-- ~~**Tool registration** ([#5](https://github.com/Influencentricity/wp-abilities-mcp/issues/5))~~ — **Fixed.** Root cause was `annotations` field (MCP spec 2025-03-26) and `protocolVersion` mismatch in HTTP responses. The sanitizer now strips annotations and rewrites protocol version.
+- **Session lock contention** ([#4](https://github.com/Influencentricity/wp-abilities-mcp/issues/4)) — Concurrent bridge instances targeting the same site can cause session loss. Use a single bridge process per site.
+- ~~**Multisite blog_id switching** ([#3](https://github.com/Influencentricity/wp-abilities-mcp/issues/3))~~ — **Fixed.** Subsite content queries now correctly switch blog context.
+- ~~**Tool registration** ([#5](https://github.com/Influencentricity/wp-abilities-mcp/issues/5))~~ — **Fixed.** Root cause was `annotations` field and `protocolVersion` mismatch. The sanitizer now preserves MCP-compliant annotations (permission hints, enabled state) and strips non-standard fields.
 
 ## Usage
 
@@ -180,20 +182,23 @@ No `site` parameter is injected in this mode.
 ## Architecture
 
 ```
-Claude Code (STDIO)
-       |
-  wp-abilities-mcp.js
-       |
-  +----+----+----------------+
-  |         |                |
-helena    wicked    wicked.community
-(SSH)     (SSH)     (SSH + --url=)
+Claude Code / Claude Desktop (STDIO)
+              |
+       wp-abilities-mcp.js
+         |          |
+    Connection Pool + Tool Catalog
+         |          |           |
+      helena      wicked   wicked.community
+      (HTTP)      (HTTP)   (HTTP + blog_id)
 ```
 
 - One STDIO process handles all sites
+- HTTP transport is primary (Application Passwords + MCP session management)
+- SSH transport is legacy (WP-CLI over SSH, kept for backward compatibility)
 - Connection pool lazily spawns transports per site
 - MCP handshake is replayed to new connections mid-session
 - Tool list comes from the default site with `site` enum injected
+- Permission metadata (`permission`, `enabled`) flows through annotations to the LLM
 
 ## Requirements
 

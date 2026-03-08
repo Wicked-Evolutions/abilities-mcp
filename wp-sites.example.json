@@ -4,11 +4,11 @@
     "mysite": {
       "label": "My WordPress Site",
       "url": "https://example.com",
-      "transport": "ssh",
-      "ssh": {
-        "host": "my-ssh-host",
-        "path": "~/public_html",
-        "user": "wpaiagent"
+      "transport": "http",
+      "http": {
+        "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+        "username": "mcp-agent",
+        "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
       }
     },
     "staging": {
@@ -21,14 +21,23 @@
         "password": "xxxx xxxx xxxx xxxx"
       }
     },
-    "network": {
-      "label": "WordPress Multisite",
-      "url": "https://network.example.com",
+    "legacy-ssh": {
+      "label": "SSH Site (legacy transport)",
       "transport": "ssh",
       "ssh": {
         "host": "my-ssh-host",
-        "path": "~/domains/network.example.com/public_html",
+        "path": "~/public_html",
         "user": "wpaiagent"
+      }
+    },
+    "network": {
+      "label": "WordPress Multisite",
+      "url": "https://network.example.com",
+      "transport": "http",
+      "http": {
+        "endpoint": "https://network.example.com/wp-json/mcp/mcp-adapter-default-server",
+        "username": "mcp-agent",
+        "passwordEnv": "WP_NETWORK_PASSWORD"
       },
       "multisite": {
         "main": "https://network.example.com/",
