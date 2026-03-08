@@ -1,6 +1,6 @@
 {
   "name": "@influencentricity/wp-abilities-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "One MCP to Rule Your WordPress World — unified multi-site bridge for WordPress abilities",
   "main": "wp-abilities-mcp.js",
   "bin": {
