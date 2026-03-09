@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.0] - 2026-03-09
+
+### Added
+- JSON-RPC batch coalescing in `HttpTransport._drainQueue()` — 10ms window accumulates concurrent messages and dispatches as a single JSON-RPC batch POST. PHP transport already handles batch arrays; this is the Node-side counterpart. Reduces N round-trips to 1 for concurrent multi-agent workloads. Sequential single-agent sessions are unaffected. Responses routed back by JSON-RPC `id` matching.
 
 ### Fixed
 - Fix integer overflow in synthetic handshake IDs — replace `Date.now()` with incrementing counter; 13-digit ms timestamps exceed 32-bit int max, causing `TypeError` in PHP `strict_types=1` environments (same root cause as `f377ff5`)
