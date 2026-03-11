@@ -14,6 +14,7 @@
  *   node wp-abilities-mcp.js --host=<ssh-host> --path=<wp-path> (legacy single-site)
  *   node wp-abilities-mcp.js --register [--name=<name>]         (Claude Desktop setup)
  *
+ * Copyright (C) 2026 Influencentricity | Wicked Evolutions
  * @package Influencentricity/wp-abilities-mcp
  * @version 1.1.0
  * @license GPL-2.0-or-later

@@ -8,7 +8,7 @@
   },
   "keywords": ["mcp", "wordpress", "ssh", "bridge", "claude", "abilities", "multi-site"],
   "license": "GPL-2.0-or-later",
-  "author": "Influencentricity",
+  "author": "Influencentricity | Wicked Evolutions",
   "repository": {
     "type": "git",
     "url": "https://github.com/Influencentricity/wp-abilities-mcp.git"
