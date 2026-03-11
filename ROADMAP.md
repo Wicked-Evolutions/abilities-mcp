@@ -12,7 +12,7 @@
 
 | Bug | Priority | Notes |
 |-----|----------|-------|
-| Entry file version comment stale | Low | `wp-abilities-mcp.js` line 3 says v1.1.0, should be v1.2.0. One-line fix. |
+| ~~Entry file version comment stale~~ | ~~Low~~ | **FIXED** — updated to v1.2.0. |
 | Bug 4: per-client handshake cache | Medium | Handshake cache is global/shared, not per-client. If multiple clients connect simultaneously, they share the same handshake. Deferred to Phase B (McpRouter extraction). |
 | SSH `pkill -f` pattern matching | Low | Uses broad `.*` wildcards in kill pattern. Could match unintended processes. SSH is legacy transport. |
 
@@ -20,7 +20,7 @@
 
 | Gap | Priority | Notes |
 |-----|----------|-------|
-| `files` field missing in package.json | Low | `npm publish` will include everything. Should explicitly list `wp-abilities-mcp.js`, `lib/`, `LICENSE`, `README.md`. |
+| ~~`files` field missing in package.json~~ | ~~Low~~ | **FIXED** — added explicit file list for clean npm publish. |
 | Schema validation errors silently dropped | Medium | Sanitizer strips non-standard fields but does NOT validate schemas. Invalid tools are passed through without warning. |
 | No automated tests | Medium | All verification is manual. Fragile for regression detection. |
 | SSH transport undocumented deprecation | Low | Decision made (HTTP-primary) but no warning logged when SSH selected. |

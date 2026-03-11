@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * wp-abilities-mcp v1.1.0
+ * wp-abilities-mcp v1.2.0
  *
  * One MCP to Rule Your WordPress World.
  *

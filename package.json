@@ -6,6 +6,7 @@
   "bin": {
     "wp-abilities-mcp": "./wp-abilities-mcp.js"
   },
+  "files": ["wp-abilities-mcp.js", "lib/", "wp-sites.example.json", "LICENSE", "README.md", "CHANGELOG.md", "ROADMAP.md"],
   "keywords": ["mcp", "wordpress", "ssh", "bridge", "claude", "abilities", "multi-site"],
   "license": "GPL-2.0-or-later",
   "author": "Influencentricity | Wicked Evolutions",
