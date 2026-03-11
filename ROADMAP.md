@@ -1,4 +1,4 @@
-# ROADMAP — WP Abilities MCP
+# ROADMAP — Abilities MCP
 
 > Source of truth for product development state. Obsidian roadmap references this file.
 > Part of the Wicked Evolutions Trinity AI Suite for WordPress.
@@ -14,7 +14,7 @@
 |-----|----------|-------|
 | ~~Entry file version comment stale~~ | ~~Low~~ | **FIXED** — updated to v1.2.0. |
 | Bug 4: per-client handshake cache | Medium | Handshake cache is global/shared, not per-client. If multiple clients connect simultaneously, they share the same handshake. Deferred to Phase B (McpRouter extraction). |
-| SSH `pkill -f` pattern matching | Low | Uses broad `.*` wildcards in kill pattern. Could match unintended processes. SSH is legacy transport. |
+| ~~SSH `pkill -f` pattern matching~~ | ~~Low~~ | **CONSOLIDATED** into SSH cleanup below. |
 
 ## Gaps
 
@@ -23,8 +23,8 @@
 | ~~`files` field missing in package.json~~ | ~~Low~~ | **FIXED** — added explicit file list for clean npm publish. |
 | ~~Schema validation errors silently dropped~~ | ~~Medium~~ | **FIXED** — `validateToolSchema()` logs warnings for invalid types, missing `items` on arrays, malformed properties. Debug log only (tools still pass through). |
 | No automated tests | Medium | All verification is manual. Fragile for regression detection. |
-| SSH transport undocumented deprecation | Low | Decision made (HTTP-primary) but no warning logged when SSH selected. |
-| Tool filtering disabled in production | Low | Feature coded and working but `enabled: false` in wp-sites.json. Could mitigate tool count issues if enabled. |
+| SSH transport cleanup | Low | Deferred post-alpha. SSH is legacy transport (HTTP is production). Three items consolidated: (1) No deprecation warning when SSH selected — add `log.warn()` in constructor. (2) `pkill -f` uses broad `.*` wildcards that could match unintended processes. (3) No documented deprecation path for users. All resolved by Phase B or by removing SSH entirely post-alpha. |
+| Tool filtering disabled in production | Low | Deferred post-alpha. Feature coded and working in sanitizer but `enabled: false` in wp-sites.json. Could mitigate tool count issues for clients that struggle with 300+ tools. Enable when needed — no code changes required. |
 
 ## Not Started
 
@@ -32,7 +32,7 @@
 |------|----------|-------|
 | Phase B: McpRouter extraction | Medium | Per-client handshake cache, SSH cleanup. Architectural refactor. **Risk: if handshake replay breaks, non-default sites stop working.** |
 | npm publish v1.2.0 | Low | `npm pack` works. Blocked on Phase B decision. |
-| SSH deprecation warning | Low | Add `log.warn()` in ssh-transport.js constructor. |
+| ~~SSH deprecation warning~~ | ~~Low~~ | **CONSOLIDATED** into SSH transport cleanup gap. |
 | ~~Improve schema validation error reporting~~ | ~~Medium~~ | **DONE** — `validateToolSchema()` in sanitizer.js surfaces schema issues in debug log. |
 
 ## Recently Completed

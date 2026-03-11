@@ -1,18 +1,18 @@
 {
-  "name": "@influencentricity/wp-abilities-mcp",
-  "version": "1.2.0",
+  "name": "@wicked-evolutions/abilities-mcp",
+  "version": "1.0.0",
   "description": "One MCP to Rule Your WordPress World — unified multi-site bridge for WordPress abilities",
-  "main": "wp-abilities-mcp.js",
+  "main": "abilities-mcp.js",
   "bin": {
-    "wp-abilities-mcp": "./wp-abilities-mcp.js"
+    "abilities-mcp": "./abilities-mcp.js"
   },
-  "files": ["wp-abilities-mcp.js", "lib/", "wp-sites.example.json", "LICENSE", "README.md", "CHANGELOG.md", "ROADMAP.md"],
+  "files": ["abilities-mcp.js", "lib/", "wp-sites.example.json", "LICENSE", "README.md", "CHANGELOG.md", "ROADMAP.md"],
   "keywords": ["mcp", "wordpress", "ssh", "bridge", "claude", "abilities", "multi-site"],
   "license": "GPL-2.0-or-later",
-  "author": "Influencentricity | Wicked Evolutions",
+  "author": "Wicked Evolutions",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Influencentricity/wp-abilities-mcp.git"
+    "url": "https://github.com/Wicked-Evolutions/abilities-mcp.git"
   },
   "scripts": {
     "test": "node --test test/*.test.js"

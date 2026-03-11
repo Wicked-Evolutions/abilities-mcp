@@ -1,4 +1,4 @@
-# wp-abilities-mcp
+# abilities-mcp
 
 > One MCP to Rule Your WordPress World.
 
@@ -50,8 +50,8 @@ The AI agent's capabilities are determined by the WordPress role you assign. Eve
 
 Install both on your WordPress site:
 
-1. **[Abilities Suite for WordPress](https://github.com/Influencentricity/abilities-suite-for-wordpress)** — registers 138 abilities
-2. **[MCP Adapter for WordPress](https://github.com/Influencentricity/mcp-adapter-for-wordpress)** — exposes abilities as MCP tools via REST API
+1. **[Abilities for AI](https://github.com/Wicked-Evolutions/abilities-for-ai)** — registers 138 abilities
+2. **[Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter)** — exposes abilities as MCP tools via REST API
 
 ### 2. Configure your sites
 
@@ -74,7 +74,7 @@ Add the server to your client's MCP config (usually `.mcp.json`, `settings.json`
   "mcpServers": {
     "wordpress": {
       "command": "node",
-      "args": ["/path/to/wp-abilities-mcp/wp-abilities-mcp.js"]
+      "args": ["/path/to/abilities-mcp/abilities-mcp.js"]
     }
   }
 }
@@ -92,7 +92,7 @@ Add the server to your client's MCP config (usually `.mcp.json`, `settings.json`
 For Claude Desktop, you can also auto-register:
 
 ```bash
-node wp-abilities-mcp.js --register
+node abilities-mcp.js --register
 ```
 
 ## Configuration
@@ -129,8 +129,8 @@ node wp-abilities-mcp.js --register
 ### Config file search order
 
 1. `--config=/path/to/wp-sites.json` (explicit)
-2. Same directory as `wp-abilities-mcp.js`
-3. `~/.wp-abilities-mcp/wp-sites.json`
+2. Same directory as `abilities-mcp.js`
+3. `~/.abilities-mcp/wp-sites.json`
 
 ### WordPress Multisite
 
@@ -249,9 +249,10 @@ The bridge provides three built-in tools (not forwarded to WordPress):
 
 ## Known Limitations
 
-- **Session lock contention** ([#4](https://github.com/Influencentricity/wp-abilities-mcp/issues/4)) — Concurrent bridge instances targeting the same site can cause session loss. Use a single bridge process per site.
-- ~~**Multisite blog_id switching** ([#3](https://github.com/Influencentricity/wp-abilities-mcp/issues/3))~~ — **Fixed.** Subsite content queries now correctly switch blog context.
-- ~~**Tool registration** ([#5](https://github.com/Influencentricity/wp-abilities-mcp/issues/5))~~ — **Fixed.** Root cause was `annotations` field and `protocolVersion` mismatch. The sanitizer now preserves MCP-compliant annotations (permission hints, enabled state) and strips non-standard fields.
+- **Session lock contention** ([#4](https://github.com/Wicked-Evolutions/abilities-mcp/issues/4)) — Concurrent bridge instances targeting the same site can cause session loss. Use a single bridge process per site.
+- **SSH transport: stale processes on hosting** — SSH transport spawns `wp mcp-adapter serve` processes on the remote server. If connections aren't cleanly terminated (client crash, network drop, force-quit), these processes can remain running and accumulate memory usage on the hosting server over time. The bridge attempts cleanup via `pkill -f` on reconnect, but the pattern matching is broad. **HTTP transport does not have this issue** — each request is stateless. If you use SSH transport, monitor your hosting for orphaned PHP processes. Contributions welcome: [#6](https://github.com/Wicked-Evolutions/abilities-mcp/issues/6).
+- ~~**Multisite blog_id switching** ([#3](https://github.com/Wicked-Evolutions/abilities-mcp/issues/3))~~ — **Fixed.** Subsite content queries now correctly switch blog context.
+- ~~**Tool registration** ([#5](https://github.com/Wicked-Evolutions/abilities-mcp/issues/5))~~ — **Fixed.** Root cause was `annotations` field and `protocolVersion` mismatch. The sanitizer now preserves MCP-compliant annotations (permission hints, enabled state) and strips non-standard fields.
 
 ## Usage
 
@@ -276,7 +277,7 @@ Omit `site` to use the default site.
 For backward compatibility with mcp-ssh-bridge:
 
 ```bash
-node wp-abilities-mcp.js --host=my-ssh-host --path=~/public_html --user=wpaiagent
+node abilities-mcp.js --host=my-ssh-host --path=~/public_html --user=wpaiagent
 ```
 
 No `site` parameter is injected in this mode.
@@ -290,7 +291,7 @@ No `site` parameter is injected in this mode.
 | `--path=<path>` | WordPress path (legacy single-site mode) |
 | `--user=<user>` | SSH/WP-CLI user |
 | `--server=<name>` | MCP adapter server name |
-| `--debug` | Enable debug logging to `/tmp/wp-abilities-mcp.log` |
+| `--debug` | Enable debug logging to `/tmp/abilities-mcp.log` |
 | `--register` | Register in Claude Desktop config |
 | `--name=<name>` | Server name for `--register` (default: `wordpress`) |
 
@@ -299,7 +300,7 @@ No `site` parameter is injected in this mode.
 ```
 Claude Code / Claude Desktop (STDIO)
               |
-       wp-abilities-mcp.js
+       abilities-mcp.js
          |          |
     Connection Pool + Tool Catalog
          |          |           |
@@ -318,7 +319,7 @@ Claude Code / Claude Desktop (STDIO)
 ## Requirements
 
 - Node.js >= 18
-- WordPress sites with [Abilities Suite for WordPress](https://github.com/Influencentricity/abilities-suite-for-wordpress) (138 abilities across 18 modules) and [MCP Adapter for WordPress](https://github.com/Influencentricity/mcp-adapter-for-wordpress) installed
+- WordPress sites with [Abilities for AI](https://github.com/Wicked-Evolutions/abilities-for-ai) (138 abilities across 18 modules) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter) installed
 - SSH access (for SSH transport) or Application Passwords (for HTTP transport)
 
 ## License

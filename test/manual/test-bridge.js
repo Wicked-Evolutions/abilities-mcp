@@ -2,7 +2,7 @@
 'use strict';
 
 var spawn = require('child_process').spawn;
-var proc = spawn('node', ['wp-abilities-mcp.js'], {
+var proc = spawn('node', ['abilities-mcp.js'], {
   cwd: __dirname,
   stdio: ['pipe', 'pipe', 'pipe']
 });

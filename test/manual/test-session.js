@@ -2,7 +2,7 @@
 'use strict';
 
 // Simulate CLI args so config.js doesn't crash
-process.argv = ['node', 'wp-abilities-mcp.js'];
+process.argv = ['node', 'abilities-mcp.js'];
 
 const { HttpTransport } = require('./lib/transports/http-transport');
 

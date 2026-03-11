@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * wp-abilities-mcp v1.2.0
+ * abilities-mcp v1.0.0
  *
  * One MCP to Rule Your WordPress World.
  *
@@ -9,14 +9,14 @@
  * routes tool calls to any configured WordPress site via SSH or HTTP.
  *
  * Usage:
- *   node wp-abilities-mcp.js                                    (uses wp-sites.json)
- *   node wp-abilities-mcp.js --config=/path/to/wp-sites.json    (explicit config)
- *   node wp-abilities-mcp.js --host=<ssh-host> --path=<wp-path> (legacy single-site)
- *   node wp-abilities-mcp.js --register [--name=<name>]         (Claude Desktop setup)
+ *   node abilities-mcp.js                                    (uses wp-sites.json)
+ *   node abilities-mcp.js --config=/path/to/wp-sites.json    (explicit config)
+ *   node abilities-mcp.js --host=<ssh-host> --path=<wp-path> (legacy single-site)
+ *   node abilities-mcp.js --register [--name=<name>]         (Claude Desktop setup)
  *
  * Copyright (C) 2026 Influencentricity | Wicked Evolutions
- * @package Influencentricity/wp-abilities-mcp
- * @version 1.1.0
+ * @package Wicked-Evolutions/abilities-mcp
+ * @version 1.0.0
  * @license GPL-2.0-or-later
  */
 
@@ -59,7 +59,7 @@ if (register) {
 // ---------------------------------------------------------------------------
 
 const log = createLogger(debug);
-log('wp-abilities-mcp v1.1.0 starting');
+log('abilities-mcp v1.0.0 starting');
 
 // Ensure SSH agent is available (macOS launchd discovery)
 SshTransport.ensureSshAuthSock();
@@ -68,7 +68,7 @@ let config;
 try {
   config = loadConfig(args);
 } catch (err) {
-  process.stderr.write(`wp-abilities-mcp: ${err.message}\n`);
+  process.stderr.write(`abilities-mcp: ${err.message}\n`);
   process.exit(1);
 }
 
@@ -144,7 +144,7 @@ process.stdin.on('end', () => {
     log(`Default transport connected: ${config.defaultSite}`);
     router.drainEarlyQueue();
   } catch (err) {
-    process.stderr.write(`wp-abilities-mcp: Failed to connect to default site: ${err.message}\n`);
+    process.stderr.write(`abilities-mcp: Failed to connect to default site: ${err.message}\n`);
     process.exit(1);
   }
 })();
