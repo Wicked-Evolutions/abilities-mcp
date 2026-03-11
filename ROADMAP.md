@@ -21,7 +21,7 @@
 | Gap | Priority | Notes |
 |-----|----------|-------|
 | ~~`files` field missing in package.json~~ | ~~Low~~ | **FIXED** — added explicit file list for clean npm publish. |
-| Schema validation errors silently dropped | Medium | Sanitizer strips non-standard fields but does NOT validate schemas. Invalid tools are passed through without warning. |
+| ~~Schema validation errors silently dropped~~ | ~~Medium~~ | **FIXED** — `validateToolSchema()` logs warnings for invalid types, missing `items` on arrays, malformed properties. Debug log only (tools still pass through). |
 | No automated tests | Medium | All verification is manual. Fragile for regression detection. |
 | SSH transport undocumented deprecation | Low | Decision made (HTTP-primary) but no warning logged when SSH selected. |
 | Tool filtering disabled in production | Low | Feature coded and working but `enabled: false` in wp-sites.json. Could mitigate tool count issues if enabled. |
@@ -33,7 +33,7 @@
 | Phase B: McpRouter extraction | Medium | Per-client handshake cache, SSH cleanup. Architectural refactor. **Risk: if handshake replay breaks, non-default sites stop working.** |
 | npm publish v1.2.0 | Low | `npm pack` works. Blocked on Phase B decision. |
 | SSH deprecation warning | Low | Add `log.warn()` in ssh-transport.js constructor. |
-| Improve schema validation error reporting | Medium | Surface failures in debug log instead of swallowing them. |
+| ~~Improve schema validation error reporting~~ | ~~Medium~~ | **DONE** — `validateToolSchema()` in sanitizer.js surfaces schema issues in debug log. |
 
 ## Recently Completed
 
