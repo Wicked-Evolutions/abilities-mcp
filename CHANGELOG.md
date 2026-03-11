@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0] - 2026-03-11
+
+### Changed
+- **Renamed:** WP Abilities MCP → **Abilities MCP** (WordPress.org trademark compliance)
+- Package name: `@wicked-evolutions/abilities-mcp`
+- Entry point: `abilities-mcp.js`
+- GitHub repo: `Wicked-Evolutions/abilities-mcp`
+
+---
+
 ## [1.2.0] - 2026-03-09
 
 ### Added
