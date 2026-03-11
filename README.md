@@ -30,9 +30,11 @@ cp wp-sites.example.json wp-sites.json
 
 Edit `wp-sites.json` with your site details (SSH hosts, paths, users, or HTTP endpoints).
 
-### 2. Add to Claude Code
+### 2. Add to your MCP client
 
-In your `.mcp.json`:
+Works with any MCP-compatible client — Claude Code, Claude Desktop, Gemini CLI, Cursor, Windsurf, VS Code, and any other IDE or AI tool that supports the Model Context Protocol.
+
+Add the server to your client's MCP config (usually `.mcp.json`, `settings.json`, or equivalent):
 
 ```json
 {
@@ -45,7 +47,16 @@ In your `.mcp.json`:
 }
 ```
 
-### 3. Add to Claude Desktop
+| Client | Config location |
+|--------|----------------|
+| Claude Code | `.mcp.json` in project root or `~/.claude/.mcp.json` |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (or use `--register`) |
+| Gemini CLI | `~/.gemini/settings.json` |
+| Cursor | `.cursor/mcp.json` in project root |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| VS Code (Copilot) | `.vscode/mcp.json` in project root |
+
+For Claude Desktop, you can also auto-register:
 
 ```bash
 node wp-abilities-mcp.js --register
@@ -109,11 +120,14 @@ Use dot notation to target subsites: `"site": "wicked.community"`
 
 ### Secure password storage
 
-Instead of plaintext passwords, use `passwordCommand` to read from your OS keychain:
+Three options for providing Application Passwords to HTTP transport, from most to least secure:
+
+#### `passwordCommand` (recommended)
+
+Runs a shell command at startup and uses stdout as the password. Works with any OS keychain or secrets manager:
 
 ```json
 {
-  "transport": "http",
   "http": {
     "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
     "username": "mcp-agent",
@@ -122,7 +136,73 @@ Instead of plaintext passwords, use `passwordCommand` to read from your OS keych
 }
 ```
 
-Also supported: `passwordEnv` to read from an environment variable.
+**macOS Keychain** — store the password first, then reference it:
+
+```bash
+# Store (one-time)
+security add-generic-password -a mcp-agent -s example.com -w 'YOUR_APP_PASSWORD'
+
+# The passwordCommand retrieves it at runtime
+"passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
+```
+
+**Linux (secret-tool / GNOME Keyring):**
+
+```bash
+# Store
+secret-tool store --label="WP MCP" service example.com user mcp-agent <<< 'YOUR_APP_PASSWORD'
+
+# Config
+"passwordCommand": "secret-tool lookup service example.com user mcp-agent"
+```
+
+**1Password CLI:**
+
+```bash
+"passwordCommand": "op read 'op://Vault/WordPress MCP/password'"
+```
+
+#### `passwordEnv`
+
+Reads the password from an environment variable. Useful in CI/CD, Docker, or when you set secrets via `.env` files:
+
+```json
+{
+  "http": {
+    "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+    "username": "mcp-agent",
+    "passwordEnv": "WP_MCP_PASSWORD"
+  }
+}
+```
+
+Set the variable before starting the bridge:
+
+```bash
+# Shell export
+export WP_MCP_PASSWORD="xxxx xxxx xxxx xxxx xxxx xxxx"
+
+# Or in a .env file loaded by your shell/Docker
+WP_MCP_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx
+```
+
+The bridge reads `process.env.WP_MCP_PASSWORD` at connection time. If the variable is not set, it throws an error immediately.
+
+#### `password` (not recommended)
+
+Plaintext password directly in the config. Avoid this — config files end up in repos, backups, and logs:
+
+```json
+{
+  "http": {
+    "password": "xxxx xxxx xxxx xxxx xxxx xxxx"
+  }
+}
+```
+
+#### Priority order
+
+If multiple are set: `passwordEnv` → `passwordCommand` → `password`.
 
 ## Bridge Tools
 
