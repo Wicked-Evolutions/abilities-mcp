@@ -1,8 +1,8 @@
-# abilities-mcp
+# Abilities MCP
 
 > One MCP to Rule Your WordPress World.
 
-**v1.2.0** — JSON-RPC batch coalescing, HTTP transport improvements.
+**v1.0.0** — Renamed from WP Abilities MCP. Unified multi-site bridge with batch coalescing and HTTP transport.
 
 Unified multi-site MCP bridge for WordPress Abilities API. Replaces separate per-site bridge instances with a single STDIO server that routes tool calls to any configured WordPress site via SSH or HTTP.
 

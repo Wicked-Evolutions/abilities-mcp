@@ -6,7 +6,7 @@
   "bin": {
     "abilities-mcp": "./abilities-mcp.js"
   },
-  "files": ["abilities-mcp.js", "lib/", "wp-sites.example.json", "LICENSE", "README.md", "CHANGELOG.md", "ROADMAP.md"],
+  "files": ["abilities-mcp.js", "lib/", "wp-sites.example.json", "LICENSE", "README.md", "CHANGELOG.md"],
   "keywords": ["mcp", "wordpress", "ssh", "bridge", "claude", "abilities", "multi-site"],
   "license": "GPL-2.0-or-later",
   "author": "Wicked Evolutions",
