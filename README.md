@@ -20,7 +20,40 @@ Unified multi-site MCP bridge for WordPress Abilities API. Replaces separate per
 
 ## Quick Start
 
-### 1. Configure your sites
+### 1. Set up WordPress
+
+Create a dedicated WordPress user for AI access and generate an Application Password.
+
+**In WordPress Admin → Users → Add New:**
+
+| Field | Value |
+|-------|-------|
+| Username | `mcp-agent` (or any name you prefer) |
+| Role | **Administrator** for full access, or **Editor** for content-only access |
+
+**Then generate an Application Password:**
+
+Go to **Users → Edit (your mcp-agent user) → Application Passwords**, enter a name (e.g. "MCP Bridge"), and click **Add New Application Password**. Copy the generated password — it's shown only once.
+
+#### Choosing a role
+
+The AI agent's capabilities are determined by the WordPress role you assign. Every ability enforces `current_user_can()` at execution time — the role is your security boundary.
+
+| Role | Modules accessible | Use case |
+|------|-------------------|----------|
+| **Administrator** | All 18 modules (138 abilities) | Full site management — content, plugins, themes, settings, users, cache, cron, filesystem |
+| **Editor** | Content, Blocks, Taxonomies, Patterns, Meta, Media (6 modules) | Content publishing workflows — safe for teams where AI should write but not configure |
+
+> **Tip:** Start with Editor. Upgrade to Administrator when you need infrastructure abilities like plugin management, theme switching, or settings changes.
+
+#### Required plugins
+
+Install both on your WordPress site:
+
+1. **[Abilities Suite for WordPress](https://github.com/Influencentricity/abilities-suite-for-wordpress)** — registers 138 abilities
+2. **[MCP Adapter for WordPress](https://github.com/Influencentricity/mcp-adapter-for-wordpress)** — exposes abilities as MCP tools via REST API
+
+### 2. Configure your sites
 
 Copy the example config and edit:
 
@@ -28,7 +61,7 @@ Copy the example config and edit:
 cp wp-sites.example.json wp-sites.json
 ```
 
-Edit `wp-sites.json` with your site details (SSH hosts, paths, users, or HTTP endpoints).
+Edit `wp-sites.json` with your site details.
 
 ### 2. Add to your MCP client
 
