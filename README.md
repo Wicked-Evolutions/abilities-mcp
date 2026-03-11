@@ -2,6 +2,8 @@
 
 > One MCP to Rule Your WordPress World.
 
+**v1.2.0** — JSON-RPC batch coalescing, HTTP transport improvements.
+
 Unified multi-site MCP bridge for WordPress Abilities API. Replaces separate per-site bridge instances with a single STDIO server that routes tool calls to any configured WordPress site via SSH or HTTP.
 
 ## Features
@@ -203,7 +205,7 @@ Claude Code / Claude Desktop (STDIO)
 ## Requirements
 
 - Node.js >= 18
-- WordPress sites with [Abilities Suite for WordPress](https://github.com/Influencentricity/abilities-suite-for-wordpress) and [MCP Adapter for WordPress](https://github.com/Influencentricity/mcp-adapter-for-wordpress) installed
+- WordPress sites with [Abilities Suite for WordPress](https://github.com/Influencentricity/abilities-suite-for-wordpress) (138 abilities across 18 modules) and [MCP Adapter for WordPress](https://github.com/Influencentricity/mcp-adapter-for-wordpress) installed
 - SSH access (for SSH transport) or Application Passwords (for HTTP transport)
 
 ## License
