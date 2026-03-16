@@ -1,13 +1,13 @@
 {
   "name": "@wicked-evolutions/abilities-mcp",
-  "version": "1.0.0",
-  "description": "One MCP to Rule Your WordPress World — unified multi-site bridge for WordPress abilities",
+  "version": "1.3.0",
+  "description": "Open-source MCP bridge connecting AI clients to WordPress through the Abilities API — multi-site routing, zero dependencies",
   "main": "abilities-mcp.js",
   "bin": {
     "abilities-mcp": "./abilities-mcp.js"
   },
   "files": ["abilities-mcp.js", "lib/", "wp-sites.example.json", "LICENSE", "README.md", "CHANGELOG.md"],
-  "keywords": ["mcp", "wordpress", "ssh", "bridge", "claude", "abilities", "multi-site"],
+  "keywords": ["mcp", "wordpress", "bridge", "abilities", "ai", "open-source", "multi-site", "model-context-protocol"],
   "license": "GPL-2.0-or-later",
   "author": "Wicked Evolutions",
   "repository": {
