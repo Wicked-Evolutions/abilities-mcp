@@ -2,21 +2,32 @@
 
 > One MCP to Rule Your WordPress World.
 
-**v1.0.0** — Renamed from WP Abilities MCP. Unified multi-site bridge with batch coalescing and HTTP transport.
-
-Unified multi-site MCP bridge for WordPress Abilities API. Replaces separate per-site bridge instances with a single STDIO server that routes tool calls to any configured WordPress site via SSH or HTTP.
+Open-source MCP bridge that connects any AI client to your WordPress sites through the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/). Single STDIO server, multi-site routing, zero dependencies.
 
 ## Features
 
 - **Multi-site routing** — Single MCP server serves all your WordPress sites
 - **Site parameter injection** — LLM sees a `site` enum on every tool, defaults to your primary site
 - **Lazy connections** — Sites connect on first use, not at startup
-- **HTTP transport (primary)** — HTTP via Application Passwords with session management
-- **SSH transport (legacy)** — SSH via WP-CLI, kept for backward compatibility
-- **WordPress multisite** — Subdomain/subdirectory multisites via dot notation (`wicked.community`)
+- **HTTP transport** — Application Passwords with MCP session management
+- **WordPress multisite** — Subdomain/subdirectory multisites via dot notation (`site.blog`)
 - **Auto-reconnect** — Exponential backoff, healthcheck pings, session recovery
 - **Zero dependencies** — Node.js built-in modules only
-- **Backward compatible** — Drop-in replacement for mcp-ssh-bridge with `--host`/`--path` args
+
+## What You Can Do
+
+The abilities available to your AI agent depend on which ability plugins you install. With [Abilities for AI](https://wickedevolutions.com/abilities-for-ai) installed, your agent gets access to:
+
+**Content & Publishing** — content, blocks, patterns, media, menus, taxonomies, comments, revisions
+**Site Management** — plugins, themes, settings, users, site health, cache, cron, rewrite rules
+**Infrastructure** — filesystem, meta, REST discovery, knowledge layer
+**Third-party integrations** — auto-detected modules for supported plugins (Astra, Spectra, SureCart, Presto Player, and more)
+
+Additional ability plugins extend coverage further. For example, [Abilities for Fluent Plugins](https://github.com/Wicked-Evolutions/abilities-for-fluent-plugins) adds modules for FluentCRM, Fluent Community, Fluent Forms, FluentBooking, Fluent Support, Fluent Boards, FluentSMTP, FluentAuth, Fluent Snippets, Fluent Messaging, FluentCart, and FluentAffiliate.
+
+Every ability enforces `current_user_can()` at execution time — your WordPress role is the security boundary.
+
+> **Sign up for the Abilities for AI alpha release:** https://wickedevolutions.com/abilities-for-ai
 
 ## Quick Start
 
@@ -37,12 +48,10 @@ Go to **Users → Edit (your mcp-agent user) → Application Passwords**, enter 
 
 #### Choosing a role
 
-The AI agent's capabilities are determined by the WordPress role you assign. Every ability enforces `current_user_can()` at execution time — the role is your security boundary.
-
-| Role | Modules accessible | Use case |
-|------|-------------------|----------|
-| **Administrator** | All 18 modules (138 abilities) | Full site management — content, plugins, themes, settings, users, cache, cron, filesystem |
-| **Editor** | Content, Blocks, Taxonomies, Patterns, Meta, Media (6 modules) | Content publishing workflows — safe for teams where AI should write but not configure |
+| Role | Access | Use case |
+|------|--------|----------|
+| **Administrator** | All modules — content, plugins, themes, settings, users, cache, cron, filesystem, and more | Full site management |
+| **Editor** | Content, Blocks, Taxonomies, Patterns, Meta, Media | Content publishing workflows — safe for teams where AI should write but not configure |
 
 > **Tip:** Start with Editor. Upgrade to Administrator when you need infrastructure abilities like plugin management, theme switching, or settings changes.
 
@@ -50,7 +59,7 @@ The AI agent's capabilities are determined by the WordPress role you assign. Eve
 
 Install both on your WordPress site:
 
-1. **[Abilities for AI](https://github.com/Wicked-Evolutions/abilities-for-ai)** — registers 138 abilities
+1. **[Abilities for AI](https://wickedevolutions.com/abilities-for-ai)** — registers WordPress abilities across content, site management, infrastructure, and third-party integration modules
 2. **[Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter)** — exposes abilities as MCP tools via REST API
 
 ### 2. Configure your sites
@@ -63,7 +72,7 @@ cp wp-sites.example.json wp-sites.json
 
 Edit `wp-sites.json` with your site details.
 
-### 2. Add to your MCP client
+### 3. Add to your MCP client
 
 Works with any MCP-compatible client — Claude Code, Claude Desktop, Gemini CLI, Cursor, Windsurf, VS Code, and any other IDE or AI tool that supports the Model Context Protocol.
 
@@ -112,15 +121,6 @@ node abilities-mcp.js --register
         "username": "mcp-agent",
         "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
       }
-    },
-    "legacy-ssh": {
-      "label": "SSH Site (legacy)",
-      "transport": "ssh",
-      "ssh": {
-        "host": "my-ssh-host",
-        "path": "~/public_html",
-        "user": "wpaiagent"
-      }
     }
   }
 }
@@ -138,22 +138,28 @@ For WordPress multisites, add a `multisite` object mapping subsite keys to their
 
 ```json
 {
-  "wicked": {
-    "transport": "ssh",
-    "ssh": { "host": "my-host", "path": "~/public_html" },
+  "network": {
+    "label": "My Network",
+    "transport": "http",
+    "http": {
+      "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+      "username": "mcp-agent",
+      "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
+    },
     "multisite": {
-      "main": "https://wickedevolutions.com/",
-      "community": "https://community.wickedevolutions.com/"
+      "main": "https://example.com/",
+      "blog": "https://blog.example.com/",
+      "shop": "https://shop.example.com/"
     }
   }
 }
 ```
 
-Use dot notation to target subsites: `"site": "wicked.community"`
+Use dot notation to target subsites: `"site": "network.blog"`
 
 ### Secure password storage
 
-Three options for providing Application Passwords to HTTP transport, from most to least secure:
+Three options for providing Application Passwords, from most to least secure:
 
 #### `passwordCommand` (recommended)
 
@@ -247,13 +253,6 @@ The bridge provides three built-in tools (not forwarded to WordPress):
 | `wp_browse_tools` | List WordPress tool categories with counts (requires `toolFilter.enabled: true`) |
 | `wp_load_tools` | Activate/deactivate tool categories for lazy loading |
 
-## Known Limitations
-
-- **Session lock contention** ([#4](https://github.com/Wicked-Evolutions/abilities-mcp/issues/4)) — Concurrent bridge instances targeting the same site can cause session loss. Use a single bridge process per site.
-- **SSH transport: stale processes on hosting** — SSH transport spawns `wp mcp-adapter serve` processes on the remote server. If connections aren't cleanly terminated (client crash, network drop, force-quit), these processes can remain running and accumulate memory usage on the hosting server over time. The bridge attempts cleanup via `pkill -f` on reconnect, but the pattern matching is broad. **HTTP transport does not have this issue** — each request is stateless. If you use SSH transport, monitor your hosting for orphaned PHP processes. Contributions welcome: [#6](https://github.com/Wicked-Evolutions/abilities-mcp/issues/6).
-- ~~**Multisite blog_id switching** ([#3](https://github.com/Wicked-Evolutions/abilities-mcp/issues/3))~~ — **Fixed.** Subsite content queries now correctly switch blog context.
-- ~~**Tool registration** ([#5](https://github.com/Wicked-Evolutions/abilities-mcp/issues/5))~~ — **Fixed.** Root cause was `annotations` field and `protocolVersion` mismatch. The sanitizer now preserves MCP-compliant annotations (permission hints, enabled state) and strips non-standard fields.
-
 ## Usage
 
 ### Multi-site mode
@@ -264,7 +263,7 @@ When multiple sites are configured, every tool gets an optional `site` parameter
 {
   "name": "content-list",
   "arguments": {
-    "site": "wicked",
+    "site": "staging",
     "post_type": "post"
   }
 }
@@ -272,24 +271,11 @@ When multiple sites are configured, every tool gets an optional `site` parameter
 
 Omit `site` to use the default site.
 
-### Legacy single-site mode
-
-For backward compatibility with mcp-ssh-bridge:
-
-```bash
-node abilities-mcp.js --host=my-ssh-host --path=~/public_html --user=wpaiagent
-```
-
-No `site` parameter is injected in this mode.
-
 ## CLI Options
 
 | Flag | Description |
 |------|-------------|
 | `--config=<path>` | Path to wp-sites.json |
-| `--host=<host>` | SSH host (legacy single-site mode) |
-| `--path=<path>` | WordPress path (legacy single-site mode) |
-| `--user=<user>` | SSH/WP-CLI user |
 | `--server=<name>` | MCP adapter server name |
 | `--debug` | Enable debug logging to `/tmp/abilities-mcp.log` |
 | `--register` | Register in Claude Desktop config |
@@ -298,29 +284,32 @@ No `site` parameter is injected in this mode.
 ## Architecture
 
 ```
-Claude Code / Claude Desktop (STDIO)
-              |
-       abilities-mcp.js
-         |          |
-    Connection Pool + Tool Catalog
-         |          |           |
-      helena      wicked   wicked.community
-      (HTTP)      (HTTP)   (HTTP + blog_id)
+AI Client (STDIO)
+       |
+  abilities-mcp.js
+    |          |
+Connection Pool + Tool Catalog
+    |          |           |
+  site-a     site-b   site-b.shop
+  (HTTP)     (HTTP)   (HTTP + blog_id)
 ```
 
 - One STDIO process handles all sites
-- HTTP transport is primary (Application Passwords + MCP session management)
-- SSH transport is legacy (WP-CLI over SSH, kept for backward compatibility)
+- HTTP transport uses Application Passwords with MCP session management
 - Connection pool lazily spawns transports per site
 - MCP handshake is replayed to new connections mid-session
 - Tool list comes from the default site with `site` enum injected
 - Permission metadata (`permission`, `enabled`) flows through annotations to the LLM
 
+## Known Limitations
+
+- **Session lock contention** ([#4](https://github.com/Wicked-Evolutions/abilities-mcp/issues/4)) — Concurrent bridge instances targeting the same site can cause session loss. Use a single bridge process per site.
+
 ## Requirements
 
 - Node.js >= 18
-- WordPress sites with [Abilities for AI](https://github.com/Wicked-Evolutions/abilities-for-ai) (138 abilities across 18 modules) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter) installed
-- SSH access (for SSH transport) or Application Passwords (for HTTP transport)
+- WordPress 6.9+ with [Abilities for AI](https://wickedevolutions.com/abilities-for-ai) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter) installed
+- Application Passwords enabled (default in WordPress 5.6+)
 
 ## License
 
