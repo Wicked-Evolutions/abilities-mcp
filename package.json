@@ -1,5 +1,5 @@
 {
-  "name": "@wicked-evolutions/abilities-mcp",
+  "name": "@wickedevolutions/abilities-mcp",
   "version": "1.3.1",
   "description": "Open-source MCP bridge connecting AI clients to WordPress through the Abilities API — multi-site routing, zero dependencies",
   "main": "abilities-mcp.js",
