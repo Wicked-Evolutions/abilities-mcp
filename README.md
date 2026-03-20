@@ -16,7 +16,7 @@ Open-source MCP bridge that connects any AI client to your WordPress sites throu
 
 ## What You Can Do
 
-The abilities available to your AI agent depend on which ability plugins you install. With [Abilities for AI](https://wickedevolutions.com/abilities-for-ai) installed, your agent gets access to:
+The abilities available to your AI agent depend on which ability plugins you install. With [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) installed, your agent gets access to:
 
 **Content & Publishing** — content, blocks, patterns, media, menus, taxonomies, comments, revisions
 **Site Management** — plugins, themes, settings, users, site health, cache, cron, rewrite rules
@@ -27,7 +27,7 @@ Additional ability plugins extend coverage further. For example, [Abilities for 
 
 Every ability enforces `current_user_can()` at execution time — your WordPress role is the security boundary.
 
-> **Sign up for the Abilities for AI alpha release:** https://wickedevolutions.com/abilities-for-ai
+> **Sign up for the Abilities for AI alpha release:** https://community.wickedevolutions.com/item/abilities-for-ai/
 
 ## Quick Start
 
@@ -59,8 +59,10 @@ Go to **Users → Edit (your mcp-agent user) → Application Passwords**, enter 
 
 Install both on your WordPress site:
 
-1. **[Abilities for AI](https://wickedevolutions.com/abilities-for-ai)** — registers WordPress abilities across content, site management, infrastructure, and third-party integration modules
-2. **[Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter)** — exposes abilities as MCP tools via REST API
+1. **[Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/)** — registers WordPress abilities across content, site management, infrastructure, and third-party integration modules
+2. **[Abilities MCP Adapter](https://community.wickedevolutions.com/item/abilities-mcp-adapter/)** — exposes abilities as MCP tools via REST API
+
+Both are available as free downloads from our store, or install from GitHub: [abilities-for-ai](https://github.com/Wicked-Evolutions/abilities-for-ai) and [abilities-mcp-adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter).
 
 ### 2. Configure your sites
 
@@ -313,7 +315,7 @@ See [docs/architecture.md](docs/architecture.md) for the full technical deep div
 ## Requirements
 
 - Node.js >= 18
-- WordPress 6.9+ with [Abilities for AI](https://wickedevolutions.com/abilities-for-ai) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter) installed
+- WordPress 6.9+ with [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter) installed
 - Application Passwords enabled (default in WordPress 5.6+)
 
 ## License
