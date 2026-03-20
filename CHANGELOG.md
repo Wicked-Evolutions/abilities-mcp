@@ -2,6 +2,28 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [1.3.1] - 2026-03-19
+
+### Fixed
+- Convert execute-ability error payloads to `isError` format — fold `input_schema` into error text for AI self-correction (#2)
+- Convert JSON-RPC error objects to `isError` format for client visibility (#4)
+
+### Changed
+- Remove protocol version rewriting from both transports — Adapter now handles MCP version negotiation natively
+
+## [1.3.0] - 2026-03-11
+
+### Added
+- Schema validation warnings in sanitizer — logs when WordPress responses contain non-standard fields
+- Architecture documentation (`docs/architecture.md`)
+
+### Changed
+- Renamed from WP Abilities MCP to **Abilities MCP**
+- Package name: `@wicked-evolutions/abilities-mcp`
+- Entry point: `abilities-mcp.js`
+- GPL-2.0 compliance headers on all source files
+- Repo cleanup: removed ROADMAP (GitHub project board is the authority), fixed stale references
+
 ## [1.2.0] - 2026-03-09
 
 ### Added
@@ -11,11 +33,6 @@ All notable changes to Abilities MCP are documented here.
 - Fix integer overflow in synthetic handshake IDs — replace `Date.now()` with incrementing counter; 13-digit ms timestamps exceed 32-bit int max, causing `TypeError` in PHP `strict_types=1` environments
 - Fix missing cookie support in HTTP transport — add per-host cookie jar; parse `Set-Cookie` response headers and send `Cookie` on subsequent requests so PHP native sessions aren't dropped between requests
 - Fix incomplete session recovery — extend re-handshake trigger to include HTTP 401/403 when an active session exists; some WordPress configs return these for stale session tokens rather than 404/410
-
-### Changed
-- Renamed from WP Abilities MCP to **Abilities MCP** (WordPress.org trademark compliance)
-- Package name: `@wicked-evolutions/abilities-mcp`
-- Entry point: `abilities-mcp.js`
 
 ## [1.1.0] - 2026-03-08
 

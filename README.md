@@ -283,23 +283,28 @@ Omit `site` to use the default site.
 
 ## Architecture
 
-```
-AI Client (STDIO)
-       |
-  abilities-mcp.js
-    |          |
-Connection Pool + Tool Catalog
-    |          |           |
-  site-a     site-b   site-b.shop
-  (HTTP)     (HTTP)   (HTTP + blog_id)
+```mermaid
+graph TD
+    Client[AI Client<br/>Claude Code · Gemini CLI · Cursor · any MCP client] -->|STDIO| Bridge[Abilities MCP]
+    Bridge -->|HTTP POST| SiteA[Site A]
+    Bridge -->|HTTP POST| SiteB[Site B]
+    Bridge -->|SSH + WP-CLI| SiteC[Site C]
+
+    subgraph "Each WordPress Site"
+        Adapter[Abilities MCP Adapter] --> AbilitiesAPI[WordPress Abilities API]
+        AbilitiesAPI --> Plugins[Ability Plugins]
+    end
 ```
 
-- One STDIO process handles all sites
-- HTTP transport uses Application Passwords with MCP session management
-- Connection pool lazily spawns transports per site
-- MCP handshake is replayed to new connections mid-session
+- One STDIO process handles all sites through a unified connection pool
+- **HTTP transport** — Application Passwords with MCP session management, batch coalescing, auto-reconnect
+- **SSH transport** — WP-CLI over SSH tunnel, healthcheck pings, handshake replay
+- Lazy connections — non-default sites connect on first tool call
 - Tool list comes from the default site with `site` enum injected
 - Permission metadata (`permission`, `enabled`) flows through annotations to the LLM
+- Error responses include `input_schema` for AI self-correction
+
+See [docs/architecture.md](docs/architecture.md) for the full technical deep dive — transport comparison tables, session management, multi-site routing internals, and security model.
 
 ## Known Limitations
 
