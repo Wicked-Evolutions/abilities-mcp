@@ -9,9 +9,9 @@ Abilities MCP is a local Node.js process that bridges the MCP protocol (STDIO) t
 ```mermaid
 graph TD
     Client[AI Client<br/>Claude Code · Gemini CLI · Cursor · any MCP client] -->|STDIO| Bridge[Abilities MCP]
-    Bridge -->|HTTP POST| SiteA[Site A<br/>helenawillow.com]
-    Bridge -->|HTTP POST| SiteB[Site B<br/>wickedevolutions.com]
-    Bridge -->|SSH + WP-CLI| SiteC[Site C<br/>legacy server]
+    Bridge -->|HTTP POST| SiteA[Site A]
+    Bridge -->|HTTP POST| SiteB[Site B]
+    Bridge -->|SSH + WP-CLI| SiteC[Site C]
 
     subgraph "Each WordPress Site"
         Adapter[Abilities MCP Adapter] --> AbilitiesAPI[WordPress Abilities API]
