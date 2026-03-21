@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in Abilities MCP, **do not open a public issue.**
 
-Email: **security@wickedevolutions.com**
+Email: **connect@winfluencentricity.com**
 
 Include:
 - Description of the vulnerability
