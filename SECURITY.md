@@ -4,7 +4,7 @@
 
 If you discover a security vulnerability in Abilities MCP, **do not open a public issue.**
 
-Email: **connect@winfluencentricity.com**
+Instead, please use [GitHub's private vulnerability reporting](https://github.com/Wicked-Evolutions/abilities-mcp/security/advisories/new) to report it directly.
 
 Include:
 - Description of the vulnerability
