@@ -2,6 +2,16 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [1.4.0] - 2026-04-26
+
+### Added
+- `.mcpb` distribution bundle for one-click install in Claude Desktop (#8). `manifest.json` against MCPB spec v0.3, `.mcpbignore`, and `npm run pack:mcpb` script. Application Password is stored encrypted in the OS keychain via `sensitive: true`. Published as a GitHub Release asset.
+- `ABILITIES_MCP_URL` / `ABILITIES_MCP_USERNAME` / `ABILITIES_MCP_PASSWORD` environment-variable config fallback in `lib/config.js`. When no `wp-sites.json` exists, the bridge builds a single-site config from the env vars and auto-derives the MCP adapter endpoint as `<URL>/wp-json/mcp/mcp-adapter-default-server`. Covers the `.mcpb` install path and any env-var-based MCP client (`claude mcp add`, Docker, etc.).
+- `npm run validate:mcpb` — validates `manifest.json` against the MCPB schema.
+
+### Changed
+- README restructured around three install paths: `.mcpb` bundle (recommended for Claude Desktop), env-vars + npm install (Claude Code / Cursor / Docker), and `wp-sites.json` (multi-site / power users). Existing `wp-sites.json` users are unaffected.
+
 ## [1.3.1] - 2026-03-19
 
 ### Fixed

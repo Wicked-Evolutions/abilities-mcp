@@ -3,3 +3,4 @@ wp-sites*.json
 !wp-sites.example.json
 *.log
 .DS_Store
+*.mcpb

@@ -29,9 +29,11 @@ Every ability enforces `current_user_can()` at execution time — your WordPress
 
 > **Sign up for the Abilities for AI alpha release:** https://community.wickedevolutions.com/item/abilities-for-ai/
 
-## Quick Start
+## Install
 
-### 1. Set up WordPress
+There are three install paths. Pick the one that matches how you use AI clients.
+
+### Set up WordPress (required for all paths)
 
 Create a dedicated WordPress user for AI access and generate an Application Password.
 
@@ -64,21 +66,72 @@ Install both on your WordPress site:
 
 Both are available as free downloads from our store, or install from GitHub: [abilities-for-ai](https://github.com/Wicked-Evolutions/abilities-for-ai) and [abilities-mcp-adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter).
 
-### 2. Configure your sites
+---
 
-Copy the example config and edit:
+### Path 1 — `.mcpb` bundle for Claude Desktop (recommended)
+
+Single-click install for Claude Desktop on macOS and Windows. The Application Password is stored encrypted in your OS keychain (macOS Keychain / Windows Credential Manager).
+
+1. Download `abilities-mcp.mcpb` from the [latest GitHub Release](https://github.com/Wicked-Evolutions/abilities-mcp/releases/latest).
+2. Double-click the file. Claude Desktop opens an "Install Extension" dialog.
+3. Type three things:
+   - **WordPress Site URL** — `https://example.com`
+   - **WordPress Username** — `mcp-agent`
+   - **Application Password** — paste the password from the previous step
+4. Click **Install**. The connection is live.
+
+The bundle covers the single-site case. For multi-site (one bridge connected to several WordPress sites at once), use Path 3.
+
+---
+
+### Path 2 — Env vars (Claude Code, Cursor, Docker, any MCP client)
+
+Install the bridge from npm, then point your client at it with three environment variables:
+
+```bash
+npm install -g @wickedevolutions/abilities-mcp
+```
+
+In your client's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "wordpress": {
+      "command": "abilities-mcp",
+      "env": {
+        "ABILITIES_MCP_URL": "https://example.com",
+        "ABILITIES_MCP_USERNAME": "mcp-agent",
+        "ABILITIES_MCP_PASSWORD": "xxxx xxxx xxxx xxxx xxxx xxxx"
+      }
+    }
+  }
+}
+```
+
+The endpoint is auto-derived as `<URL>/wp-json/mcp/mcp-adapter-default-server`. Single-site only — for multi-site, use Path 3.
+
+For `claude mcp add` users:
+
+```bash
+claude mcp add wordpress \
+  --env ABILITIES_MCP_URL=https://example.com \
+  --env ABILITIES_MCP_USERNAME=mcp-agent \
+  --env ABILITIES_MCP_PASSWORD='xxxx xxxx xxxx xxxx xxxx xxxx' \
+  -- abilities-mcp
+```
+
+---
+
+### Path 3 — `wp-sites.json` (multi-site, power users)
+
+Use this when you connect one bridge to multiple WordPress sites, when you want passwords sourced from a keychain or shell command, or when you're targeting WordPress multisite networks via dot-notation routing.
 
 ```bash
 cp wp-sites.example.json wp-sites.json
 ```
 
-Edit `wp-sites.json` with your site details.
-
-### 3. Add to your MCP client
-
-Works with any MCP-compatible client — Claude Code, Claude Desktop, Gemini CLI, Cursor, Windsurf, VS Code, and any other IDE or AI tool that supports the Model Context Protocol.
-
-Add the server to your client's MCP config (usually `.mcp.json`, `settings.json`, or equivalent):
+Edit `wp-sites.json` with your sites, then add the server to your client's MCP config:
 
 ```json
 {
@@ -128,11 +181,15 @@ node abilities-mcp.js --register
 }
 ```
 
-### Config file search order
+### Config search order
 
 1. `--config=/path/to/wp-sites.json` (explicit)
-2. Same directory as `abilities-mcp.js`
+2. `wp-sites.json` in the same directory as `abilities-mcp.js`
 3. `~/.abilities-mcp/wp-sites.json`
+4. `ABILITIES_MCP_URL` / `ABILITIES_MCP_USERNAME` / `ABILITIES_MCP_PASSWORD` env vars (single-site, used by the `.mcpb` bundle)
+5. `--host=<ssh-host> --path=<wp-path>` (legacy SSH single-site)
+
+The first one found wins. If a `wp-sites.json` exists, env vars are ignored.
 
 ### WordPress Multisite
 
