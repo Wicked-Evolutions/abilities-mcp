@@ -23,7 +23,9 @@ The abilities available to your AI agent depend on which ability plugins you ins
 **Infrastructure** — filesystem, meta, REST discovery, knowledge layer
 **Third-party integrations** — auto-detected modules for supported plugins (Astra, Spectra, SureCart, Presto Player, and more)
 
-Additional ability plugins extend coverage further. For example, [Abilities for Fluent Plugins](https://github.com/Wicked-Evolutions/abilities-for-fluent-plugins) adds modules for FluentCRM, Fluent Community, Fluent Forms, FluentBooking, Fluent Support, Fluent Boards, FluentSMTP, FluentAuth, Fluent Snippets, Fluent Messaging, FluentCart, and FluentAffiliate.
+**[Abilities for Fluent Plugins](https://github.com/Wicked-Evolutions/abilities-for-fluent-plugins)** is our continuously-enhanced third-party translator — bringing AI control to FluentCRM, FluentCommunity, FluentForms, FluentBooking, FluentSupport, FluentBoards, FluentSMTP, FluentAuth, FluentSnippets, FluentMessaging, FluentCart, and FluentAffiliate. We build and maintain it because we use Fluent's plugins ourselves and wanted them AI-native.
+
+Beyond Fluent, the bridge is plugin-agnostic by design. Any plugin that registers abilities through the WordPress Abilities API becomes available automatically — no configuration in this bridge required. We urge every WordPress plugin developer to prioritize native Abilities API support over anything else.
 
 Every ability enforces `current_user_can()` at execution time — your WordPress role is the security boundary.
 
