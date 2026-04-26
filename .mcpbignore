@@ -1,0 +1,35 @@
+# Files excluded from the .mcpb bundle.
+# Bundle ships only the runtime: abilities-mcp.js, lib/, manifest.json, LICENSE, README.
+
+# Version control
+.git/
+.github/
+.gitignore
+
+# Tests + dev tooling
+test/
+.npmignore
+.nvmrc
+
+# Operator-specific configs (the bundle uses env vars from manifest user_config)
+wp-sites.json
+wp-sites-*.json
+!wp-sites.example.json
+
+# Docs that don't need to ship inside the bundle
+docs/
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md
+
+# Build artifacts
+*.mcpb
+node_modules/
+
+# OS / editor noise
+.DS_Store
+*.log
+*.swp
+*.swo
+.vscode/
+.idea/
