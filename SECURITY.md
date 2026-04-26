@@ -22,7 +22,9 @@ This policy covers:
 - Transport security (SSH, HTTP, session management)
 - Schema sanitization
 
-For vulnerabilities in the WordPress plugins (Abilities for AI, Abilities MCP Adapter), report to the same email address.
+For vulnerabilities in the WordPress plugins, use the relevant repository's private reporting:
+- [abilities-mcp-adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter/security/advisories/new) — WordPress-side MCP protocol layer
+- [abilities-for-ai](https://github.com/Wicked-Evolutions/abilities-for-ai/security/advisories/new) — ability provider
 
 ## Supported Versions
 
