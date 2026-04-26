@@ -12,7 +12,7 @@ Include:
 - Potential impact
 - Suggested fix (if you have one)
 
-We will acknowledge receipt within 48 hours and provide a timeline for a fix. Critical vulnerabilities will be patched and released as soon as possible.
+We review private vulnerability reports as bandwidth allows. We do not commit to specific response or fix timelines — this is a small team, and timing depends on severity, complexity, and what else is in flight. We will respond when we have something useful to say. Critical issues are prioritized.
 
 ## Scope
 
