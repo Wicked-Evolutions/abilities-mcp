@@ -30,140 +30,173 @@ const { McpRouter } = require('./lib/router');
 const { SshTransport } = require('./lib/transports/ssh-transport');
 
 // ---------------------------------------------------------------------------
-// CLI argument parsing
+// Subcommand routing (Phase 5 OAuth CLI)
 // ---------------------------------------------------------------------------
+// `abilities-mcp <subcommand>` (e.g. add-site, list-sites) dispatches to the
+// OAuth CLI in lib/cli/. With no subcommand the bridge starts the MCP server
+// as before — this preserves backwards compatibility for every existing
+// invocation path (Claude Desktop, .mcpb bundle, bare `node abilities-mcp.js`).
+const { isKnownSubcommand, runCommand, HELP_TEXT, isHelpToken } = require('./lib/cli');
 
-const args = {};
-process.argv.slice(2).forEach(arg => {
-  if (arg.startsWith('--')) {
-    const [key, ...rest] = arg.slice(2).split('=');
-    args[key] = rest.length ? rest.join('=') : true;
-  }
-});
+const rawArgs = process.argv.slice(2);
+const firstToken = rawArgs[0];
 
-const debug    = !!args.debug;
-const register = !!args.register;
-
-// ---------------------------------------------------------------------------
-// Registration mode (--register)
-// ---------------------------------------------------------------------------
-
-if (register) {
-  const { registerClaudeDesktop } = require('./lib/register');
-  registerClaudeDesktop({ name: args.name || 'wordpress', configPath: args.config });
+if (firstToken && isHelpToken(firstToken)) {
+  process.stdout.write(HELP_TEXT.join('\n') + '\n');
   process.exit(0);
 }
 
-// ---------------------------------------------------------------------------
-// Initialize
-// ---------------------------------------------------------------------------
+const isSubcommandInvocation = firstToken && isKnownSubcommand(firstToken);
 
-const log = createLogger(debug);
-log('abilities-mcp v1.0.0 starting');
-
-// Ensure SSH agent is available (macOS launchd discovery)
-SshTransport.ensureSshAuthSock();
-
-let config;
-try {
-  config = loadConfig(args);
-} catch (err) {
-  process.stderr.write(`abilities-mcp: ${err.message}\n`);
-  process.exit(1);
-}
-
-const isMultiSite = config._isMultiSite;
-const siteKeys = buildSiteKeyEnum(config);
-log(`Config loaded: ${siteKeys.length} site(s): ${siteKeys.join(', ')} (default: ${config.defaultSite})`);
-log(`Multi-site mode: ${isMultiSite}`);
-
-const pool = new ConnectionPool(config, log);
-const catalog = new ToolCatalog(config, log);
-
-if (catalog.isEnabled()) {
-  log('Tool filtering enabled');
-} else {
-  log('Tool filtering disabled (no toolFilter in config or enabled: false)');
-}
-
-function sendToClient(data) {
-  process.stdout.write(data + '\n');
-}
-
-const router = new McpRouter({
-  config,
-  siteKeys,
-  isMultiSite,
-  pool,
-  catalog,
-  sendToClient,
-  log,
-});
-
-// ---------------------------------------------------------------------------
-// Client STDIO processing
-// ---------------------------------------------------------------------------
-
-let inputBuffer = '';
-
-process.stdin.on('data', (chunk) => {
-  inputBuffer += chunk.toString();
-
-  let newlineIdx;
-  while ((newlineIdx = inputBuffer.indexOf('\n')) !== -1) {
-    const line = inputBuffer.slice(0, newlineIdx);
-    inputBuffer = inputBuffer.slice(newlineIdx + 1);
-    if (line.trim()) {
-      let msg;
-      try {
-        msg = JSON.parse(line.trim());
-      } catch (e) {
-        log(`Non-JSON from client (dropped): ${line.substring(0, 200)}`);
-        continue;
-      }
-      router.handleClientMessage(msg, line.trim());
+if (isSubcommandInvocation) {
+  (async () => {
+    try {
+      const { exitCode, lines, errLines } = await runCommand({
+        subcommand: firstToken,
+        argv: rawArgs.slice(1),
+      });
+      if (lines.length) process.stdout.write(lines.join('\n') + '\n');
+      if (errLines.length) process.stderr.write(errLines.join('\n') + '\n');
+      process.exit(exitCode);
+    } catch (err) {
+      // Last-resort safety net — runCommand normally catches everything.
+      process.stderr.write(`abilities-mcp: ${err.message}\n`);
+      process.exit(1);
     }
-  }
-});
-
-process.stdin.on('end', () => {
-  log('Client stdin closed — shutting down');
-  shutdown();
-});
+  })();
+}
 
 // ---------------------------------------------------------------------------
-// Startup — connect to default site
+// MCP server mode — the original CLI argument parsing (no subcommand).
+// Skipped when a subcommand was dispatched above; otherwise we'd race the
+// IIFE's process.exit() against the synchronous loadConfig() / connectDefault().
 // ---------------------------------------------------------------------------
 
-(async function main() {
-  try {
-    const transport = await pool.connectDefault((parsedMsg, rawLine) => {
-      router.handleTransportMessage(parsedMsg, rawLine);
-    });
-    router.setDefaultTransport(transport);
-    log(`Default transport connected: ${config.defaultSite}`);
-    router.drainEarlyQueue();
-  } catch (err) {
-    process.stderr.write(`abilities-mcp: Failed to connect to default site: ${err.message}\n`);
-    process.exit(1);
-  }
-})();
+if (!isSubcommandInvocation) {
+  const args = {};
+  rawArgs.forEach(arg => {
+    if (arg.startsWith('--')) {
+      const [key, ...rest] = arg.slice(2).split('=');
+      args[key] = rest.length ? rest.join('=') : true;
+    }
+  });
 
-// ---------------------------------------------------------------------------
-// Signal handling
-// ---------------------------------------------------------------------------
+  const debug    = !!args.debug;
+  const register = !!args.register;
 
-function shutdown() {
-  log('Shutting down');
-  pool.shutdownAll().then(() => {
+  if (register) {
+    const { registerClaudeDesktop } = require('./lib/register');
+    registerClaudeDesktop({ name: args.name || 'wordpress', configPath: args.config });
     process.exit(0);
-  }).catch(() => {
+  }
+
+  const log = createLogger(debug);
+  log('abilities-mcp v1.0.0 starting');
+
+  // Ensure SSH agent is available (macOS launchd discovery)
+  SshTransport.ensureSshAuthSock();
+
+  let config;
+  try {
+    config = loadConfig(args);
+  } catch (err) {
+    process.stderr.write(`abilities-mcp: ${err.message}\n`);
     process.exit(1);
+  }
+
+  const isMultiSite = config._isMultiSite;
+  const siteKeys = buildSiteKeyEnum(config);
+  log(`Config loaded: ${siteKeys.length} site(s): ${siteKeys.join(', ')} (default: ${config.defaultSite})`);
+  log(`Multi-site mode: ${isMultiSite}`);
+
+  const pool = new ConnectionPool(config, log);
+  const catalog = new ToolCatalog(config, log);
+
+  if (catalog.isEnabled()) {
+    log('Tool filtering enabled');
+  } else {
+    log('Tool filtering disabled (no toolFilter in config or enabled: false)');
+  }
+
+  function sendToClient(data) {
+    process.stdout.write(data + '\n');
+  }
+
+  const router = new McpRouter({
+    config,
+    siteKeys,
+    isMultiSite,
+    pool,
+    catalog,
+    sendToClient,
+    log,
+  });
+
+  // -------------------------------------------------------------------------
+  // Client STDIO processing
+  // -------------------------------------------------------------------------
+
+  let inputBuffer = '';
+
+  process.stdin.on('data', (chunk) => {
+    inputBuffer += chunk.toString();
+
+    let newlineIdx;
+    while ((newlineIdx = inputBuffer.indexOf('\n')) !== -1) {
+      const line = inputBuffer.slice(0, newlineIdx);
+      inputBuffer = inputBuffer.slice(newlineIdx + 1);
+      if (line.trim()) {
+        let msg;
+        try {
+          msg = JSON.parse(line.trim());
+        } catch (e) {
+          log(`Non-JSON from client (dropped): ${line.substring(0, 200)}`);
+          continue;
+        }
+        router.handleClientMessage(msg, line.trim());
+      }
+    }
+  });
+
+  process.stdin.on('end', () => {
+    log('Client stdin closed — shutting down');
+    shutdown();
+  });
+
+  // -------------------------------------------------------------------------
+  // Startup — connect to default site
+  // -------------------------------------------------------------------------
+
+  (async function main() {
+    try {
+      const transport = await pool.connectDefault((parsedMsg, rawLine) => {
+        router.handleTransportMessage(parsedMsg, rawLine);
+      });
+      router.setDefaultTransport(transport);
+      log(`Default transport connected: ${config.defaultSite}`);
+      router.drainEarlyQueue();
+    } catch (err) {
+      process.stderr.write(`abilities-mcp: Failed to connect to default site: ${err.message}\n`);
+      process.exit(1);
+    }
+  })();
+
+  // -------------------------------------------------------------------------
+  // Signal handling
+  // -------------------------------------------------------------------------
+
+  function shutdown() {
+    log('Shutting down');
+    pool.shutdownAll().then(() => {
+      process.exit(0);
+    }).catch(() => {
+      process.exit(1);
+    });
+  }
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  process.on('unhandledRejection', (reason) => {
+    log(`Unhandled rejection: ${reason}`);
   });
 }
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-process.on('unhandledRejection', (reason) => {
-  log(`Unhandled rejection: ${reason}`);
-});
