@@ -5,7 +5,7 @@ All notable changes to Abilities MCP are documented here.
 ## [Unreleased]
 
 ### Added
-- **Phase 5 OAuth CLI surface** (#13). `abilities-mcp <subcommand>` dispatches to nine new subcommands wrapping the Phase 4 `lib/auth/` module: `add-site`, `reauth`, `revoke`, `list-sites`, `test`, `upgrade-auth`, `force-downgrade` (Appendix H.2.3), `self-check` (Appendix H.2.6), `clear-keychain` (Appendix H.3.2). Each subcommand subscribes to the OAuth state machine and prints operator-facing progress lines. Error messages name the exact next action. Bare `node abilities-mcp.js` (no subcommand) still starts the MCP STDIO server unchanged.
+- **Phase 5 OAuth CLI surface** (#13). `abilities-mcp <subcommand>` dispatches to eight new subcommands wrapping the Phase 4 `lib/auth/` module: the six in the sprint plan — `add-site`, `reauth`, `revoke`, `list-sites`, `test`, `upgrade-auth` — plus two extensions documented in Appendix J of the design doc: `force-downgrade` (J.1, escape hatch for the H.2.3 capability-pin failure) and `self-check` (J.2, the H.2.6 Authorization-header probe). Each subcommand subscribes to the OAuth state machine and prints operator-facing progress lines. Error messages name the exact next action. Bare `node abilities-mcp.js` (no subcommand) still starts the MCP STDIO server unchanged.
 - Exit-code table (`0`/`1`/`2`/`3`/`4`/`5`) mapping success / generic / usage / config / auth / capability-pinning failures, documented in `abilities-mcp --help`.
 - `--debug` flag includes the `cause` stack on errors for troubleshooting.
 - `force-downgrade` audit lives on the site config (`force_downgrade.{at, expires_at, reason}`) and is surfaced in `list-sites` for 30 days.
