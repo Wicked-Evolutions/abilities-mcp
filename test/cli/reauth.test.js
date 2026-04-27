@@ -35,6 +35,27 @@ describe('CLI reauth', () => {
     assert.equal(cfg.sites.mock.auth_status, 'active');
   });
 
+  it('preserves apppassword_fallback so an in-progress upgrade-auth survives reauth', async () => {
+    h.writeConfig({
+      schema_version: SCHEMA_VERSION,
+      sites: {
+        mock: Object.assign(v2SiteOAuth(server.siteUrl), {
+          auth: Object.assign({}, v2SiteOAuth(server.siteUrl).auth, {
+            apppassword_fallback: {
+              username: 'wp_admin',
+              password_ref: 'keychain://abilities-mcp/mock/apppassword-legacy',
+            },
+          }),
+        }),
+      },
+    });
+    const r = await h.runCli('reauth', ['mock']);
+    assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+    const cfg = h.readConfig();
+    assert.ok(cfg.sites.mock.auth.apppassword_fallback);
+    assert.equal(cfg.sites.mock.auth.apppassword_fallback.username, 'wp_admin');
+  });
+
   it('errors on unknown site_id', async () => {
     h.writeConfig({ schema_version: SCHEMA_VERSION, sites: {} });
     const r = await h.runCli('reauth', ['ghost']);
