@@ -252,6 +252,12 @@ class MockAuthServer {
         this.config.refreshFailures--;
         return send(503, '');
       }
+      // Tests can pin the response by setting `tokenJson`. When set, the
+      // refresh path returns it verbatim — useful for asserting that the
+      // resource sees the post-refresh bearer.
+      if (this.config.tokenJson) {
+        return send(200, this.config.tokenJson);
+      }
       const tokens = {
         access_token: `at-${randomBytes(8).toString('hex')}`,
         token_type: 'Bearer',
