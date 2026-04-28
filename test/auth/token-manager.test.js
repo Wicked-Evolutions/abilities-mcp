@@ -58,7 +58,7 @@ describe('TokenManager.getAccessToken — refresh window (H.2.1 + Token-refresh)
   });
 });
 
-describe('TokenManager.refresh — H.2.1 retry semantics', () => {
+describe('TokenManager.refresh — retry semantics', () => {
   it('retries up to 2 times on 5xx with the same refresh token', async () => {
     const server = await new MockAuthServer({ refreshFailures: 2 }).start();
     try {
@@ -74,8 +74,6 @@ describe('TokenManager.refresh — H.2.1 retry semantics', () => {
       assert.equal(updatedAuth.authStatus, 'active');
       // Server saw 3 attempts (2 failures + 1 success).
       assert.equal(server._refreshAttempts, 3);
-      // Intent marker is cleaned up.
-      assert.equal(await store.get(SECRET_SERVICE, 'siteA/refresh-intent'), null);
     } finally { await server.stop(); }
   });
 
@@ -121,10 +119,14 @@ describe('TokenManager.refresh — H.2.1 retry semantics', () => {
     } finally { await server.stop(); }
   });
 
-  it('persists intent-to-refresh BEFORE sending request (H.2.1)', async () => {
+  it('does not write a refresh-intent keychain marker (H-7)', async () => {
+    // The dead refresh-intent code (a marker written before sending and deleted
+    // on every exit path) was removed in PR #20 — server-side encrypt-at-rest
+    // grace-window retry (adapter PR #61, v1.4.2) now handles in-flight
+    // recovery. Verify no `${siteId}/refresh-intent` entry is ever written
+    // during a successful refresh.
     let intentSeenDuringRequest = null;
     const fakePostForm = async () => {
-      // Capture store contents at the moment the request is in flight.
       intentSeenDuringRequest = await store.get(SECRET_SERVICE, 'siteA/refresh-intent');
       return { statusCode: 200, headers: {}, body: '', json: {
         access_token: 'AT-new', refresh_token: 'RT-new', expires_in: 3600,
@@ -138,9 +140,8 @@ describe('TokenManager.refresh — H.2.1 retry semantics', () => {
       deps: { postForm: fakePostForm, sleep: () => Promise.resolve() },
     });
     await tm.refresh(buildSiteAuth());
-    assert.ok(intentSeenDuringRequest, 'intent must be persisted before request');
-    // After success, intent is cleared.
-    assert.equal(await store.get(SECRET_SERVICE, 'siteA/refresh-intent'), null);
+    assert.equal(intentSeenDuringRequest, null, 'no refresh-intent marker during request');
+    assert.equal(await store.get(SECRET_SERVICE, 'siteA/refresh-intent'), null, 'no refresh-intent marker after success');
   });
 
   it('refuses to refresh when authStatus is already expired', async () => {
