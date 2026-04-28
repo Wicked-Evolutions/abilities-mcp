@@ -2,13 +2,36 @@
 
 All notable changes to Abilities MCP are documented here.
 
-## [Unreleased]
+## [1.5.0] - 2026-04-28
 
-### Added
-- **Phase 5 OAuth CLI surface** (#13). `abilities-mcp <subcommand>` dispatches to eight new subcommands wrapping the Phase 4 `lib/auth/` module: the six in the sprint plan — `add-site`, `reauth`, `revoke`, `list-sites`, `test`, `upgrade-auth` — plus two extensions documented in Appendix J of the design doc: `force-downgrade` (J.1, escape hatch for the H.2.3 capability-pin failure) and `self-check` (J.2, the H.2.6 Authorization-header probe). Each subcommand subscribes to the OAuth state machine and prints operator-facing progress lines. Error messages name the exact next action. Bare `node abilities-mcp.js` (no subcommand) still starts the MCP STDIO server unchanged.
+OAuth 2.1 release. The bridge is now a full OAuth client: it discovers the authorization server via RFC 9728, performs Dynamic Client Registration (RFC 7591), drives the authorization-code grant with PKCE S256 (RFC 7636) through a loopback browser flow (RFC 8252), persists tokens in the OS keychain, refreshes them automatically, and sends Bearer tokens through the runtime MCP transport.
+
+Companion release: [abilities-mcp-adapter v1.4.3](https://github.com/Wicked-Evolutions/abilities-mcp-adapter/releases/tag/v1.4.3) — the OAuth resource server + authorization server.
+
+### Added — OAuth 2.1 client core (#15)
+
+- **`lib/auth/` module** — full OAuth 2.1 client: `oauth-client.js` (state machine), `discovery-client.js` (RFC 9728 + RFC 8414, refuses HTTP, refuses redirects on `.well-known/*`, throws `CapabilityPinningError` on pinned 404), `dcr-client.js` (RFC 7591), `pkce.js` (32-byte verifier, S256, 16-byte hex state, `crypto.timingSafeEqual` with length-mismatch CPU-burn defense), `loopback-server.js` (RFC 8252 loopback callback), `browser-launcher.js` (cross-platform `open`), `token-manager.js` (refresh window, retry semantics, expired/revoked state machine).
+- **`SecretStore` interface** — three implementations: `keychain-secret-store.js` (libsecret on Linux, Keychain on macOS, Credential Manager on Windows), `memory-secret-store.js` (testing), `secret-store.js` (interface). All token persistence flows through this interface.
+- **`BridgeIdentityProvider` interface** + **`FreshEachTimeIdentityProvider`** (v1.0 implementation per Appendix H.3.2 binding amendment): `getClientId()` always returns null → fresh DCR on every flow. `persistClientId()` is a documented no-op pending v1.1's persistent-identity upgrade contract.
+- **`schema-v2.js`** — keychain references replace inline secrets in `wp-sites.json`. `schema_version: 2` with `auth.method`, `access_token_ref`, `refresh_token_ref`, `oauth_capability_pinned`, `apppassword_fallback`. `config-migration.js` upgrades v1 configs in place.
+- **`OAuthHttpTransport`** (#18) — runtime transport that uses `TokenManager.getAccessToken()` before each request, builds `Authorization: Bearer ...`, handles 401 → `forceRefresh` → retry-once, surfaces terminal auth failure via `onAuthStatusChange('expired')`. `ConnectionPool._create()` dispatches to this when `siteConfig.auth.method === 'oauth'`.
+
+### Added — OAuth CLI subcommands (#16)
+
+- **`abilities-mcp <subcommand>`** dispatches to eight new subcommands wrapping `lib/auth/`: the six in the sprint plan — `add-site`, `reauth`, `revoke`, `list-sites`, `test`, `upgrade-auth` — plus two design-doc extensions: `force-downgrade` (J.1, escape hatch for the H.2.3 capability-pin failure) and `self-check` (J.2, the H.2.6 Authorization-header probe). Each subcommand subscribes to the OAuth state machine and prints operator-facing progress lines. Error messages name the exact next action. Bare `node abilities-mcp.js` (no subcommand) still starts the MCP STDIO server unchanged.
 - Exit-code table (`0`/`1`/`2`/`3`/`4`/`5`) mapping success / generic / usage / config / auth / capability-pinning failures, documented in `abilities-mcp --help`.
 - `--debug` flag includes the `cause` stack on errors for troubleshooting.
 - `force-downgrade` audit lives on the site config (`force_downgrade.{at, expires_at, reason}`) and is surfaced in `list-sites` for 30 days.
+
+### Security
+
+- **H-7: removed dead refresh-intent keychain code** (#21). `TokenManager.refresh()` previously wrote a `${siteId}/refresh-intent` keychain entry before sending the refresh request and deleted it on every exit path. The marker had no reader — the original H.2.1 mid-flight crash-recovery semantics were never implemented. With the adapter's C-2 fix shipping encrypt-at-rest grace-window retry on the server (adapter PR #61), the bridge no longer needs an in-flight intent marker. Pure deletion of dead code that paid a keychain write per refresh.
+- **H-8: client_id port guard in `_runRegister`** (#22). `OAuthClient._runRegister` previously returned a persisted `client_id` from `identityProvider.getClientId()` without verifying that the registered loopback redirect_uri's port matched the live loopback port. v1.0 was safe by accident because `FreshEachTimeIdentityProvider.getClientId()` always returns null. v1.1's persistent-identity upgrade (per Appendix H.3.2) would have surfaced the bug: a stale persisted client_id whose registered port no longer matched would fail server-side `redirect_uri_valid()`. Defensive fix: `_runRegister` now always calls `identityProvider.clearClientId()` before DCR. v1.1+ designs that want to short-circuit DCR on persisted client_id must do so at the `OAuthClient.run()` level after verifying the loopback port matches the registration. See follow-up [abilities-mcp-adapter#73](https://github.com/Wicked-Evolutions/abilities-mcp-adapter/issues/73) for the spec amendment.
+
+### Internal
+
+- Test count: 210 (+34 since 1.4.0). Node CI matrix: 18, 20, 22.
+- `infra: retarget project automation` (#14) for the OAuth sprint workflow.
 
 ## [1.4.0] - 2026-04-26
 
