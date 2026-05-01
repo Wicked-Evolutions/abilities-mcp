@@ -23,11 +23,13 @@
 'use strict';
 
 const { createLogger } = require('./lib/logger');
-const { loadConfig, buildSiteKeyEnum } = require('./lib/config');
+const { loadConfig, buildSiteKeyEnum, resolveConfigFilePath } = require('./lib/config');
 const { ConnectionPool } = require('./lib/connection-pool');
 const { ToolCatalog } = require('./lib/tool-catalog');
 const { McpRouter } = require('./lib/router');
 const { SshTransport } = require('./lib/transports/ssh-transport');
+const { migrateFile } = require('./lib/auth/config-migration');
+const { KeychainSecretStore } = require('./lib/auth/keychain-secret-store');
 
 // ---------------------------------------------------------------------------
 // Subcommand routing (Phase 5 OAuth CLI)
@@ -96,78 +98,111 @@ if (!isSubcommandInvocation) {
   // Ensure SSH agent is available (macOS launchd discovery)
   SshTransport.ensureSshAuthSock();
 
-  let config;
-  try {
-    config = loadConfig(args);
-  } catch (err) {
-    process.stderr.write(`abilities-mcp: ${err.message}\n`);
-    process.exit(1);
-  }
-
-  const isMultiSite = config._isMultiSite;
-  const siteKeys = buildSiteKeyEnum(config);
-  log(`Config loaded: ${siteKeys.length} site(s): ${siteKeys.join(', ')} (default: ${config.defaultSite})`);
-  log(`Multi-site mode: ${isMultiSite}`);
-
-  const pool = new ConnectionPool(config, log);
-  const catalog = new ToolCatalog(config, log);
-
-  if (catalog.isEnabled()) {
-    log('Tool filtering enabled');
-  } else {
-    log('Tool filtering disabled (no toolFilter in config or enabled: false)');
-  }
-
-  function sendToClient(data) {
-    process.stdout.write(data + '\n');
-  }
-
-  const router = new McpRouter({
-    config,
-    siteKeys,
-    isMultiSite,
-    pool,
-    catalog,
-    sendToClient,
-    log,
-  });
-
   // -------------------------------------------------------------------------
-  // Client STDIO processing
+  // Async startup — schema v1→v2 migration must complete BEFORE loadConfig.
   // -------------------------------------------------------------------------
-
-  let inputBuffer = '';
-
-  process.stdin.on('data', (chunk) => {
-    inputBuffer += chunk.toString();
-
-    let newlineIdx;
-    while ((newlineIdx = inputBuffer.indexOf('\n')) !== -1) {
-      const line = inputBuffer.slice(0, newlineIdx);
-      inputBuffer = inputBuffer.slice(newlineIdx + 1);
-      if (line.trim()) {
-        let msg;
-        try {
-          msg = JSON.parse(line.trim());
-        } catch (e) {
-          log(`Non-JSON from client (dropped): ${line.substring(0, 200)}`);
-          continue;
+  // Per Appendix F.5 (binding): the migration is "Triggered on first bridge
+  // launch after upgrade. One-shot, non-destructive." `migrateFile` is
+  // idempotent — second-run on a v2 file is a no-op. Called before
+  // `loadConfig` so that when v1 is on disk, `loadConfig` reads the freshly
+  // rewritten v2 file (with secrets lifted into the keychain).
+  //
+  // The MCP server uses a fresh `KeychainSecretStore` instance here. The
+  // store is a stateless wrapper over keytar — entry identity is determined
+  // entirely by (service, account), so a freshly constructed instance writes
+  // to the same keychain entries the runtime/CLI later read.
+  //
+  // Env-var single-site mode (.mcpb path) and legacy --host/--path mode have
+  // no on-disk wp-sites.json; `resolveConfigFilePath` returns null and we
+  // skip migration entirely.
+  (async function bootstrap() {
+    const filePath = resolveConfigFilePath(args);
+    if (filePath) {
+      try {
+        const result = await migrateFile({
+          filePath,
+          secretStore: new KeychainSecretStore(),
+        });
+        if (result.migrated) {
+          log(`Migrated wp-sites.json v1 → v2 (${result.liftedCount} secret(s) lifted; backup: ${result.backupPath})`);
         }
-        router.handleClientMessage(msg, line.trim());
+      } catch (err) {
+        process.stderr.write(`abilities-mcp: schema migration failed: ${err.message}\n`);
+        process.exit(1);
       }
     }
-  });
 
-  process.stdin.on('end', () => {
-    log('Client stdin closed — shutting down');
-    shutdown();
-  });
+    let config;
+    try {
+      config = loadConfig(args);
+    } catch (err) {
+      process.stderr.write(`abilities-mcp: ${err.message}\n`);
+      process.exit(1);
+    }
 
-  // -------------------------------------------------------------------------
-  // Startup — connect to default site
-  // -------------------------------------------------------------------------
+    const isMultiSite = config._isMultiSite;
+    const siteKeys = buildSiteKeyEnum(config);
+    log(`Config loaded: ${siteKeys.length} site(s): ${siteKeys.join(', ')} (default: ${config.defaultSite})`);
+    log(`Multi-site mode: ${isMultiSite}`);
 
-  (async function main() {
+    const pool = new ConnectionPool(config, log);
+    const catalog = new ToolCatalog(config, log);
+
+    if (catalog.isEnabled()) {
+      log('Tool filtering enabled');
+    } else {
+      log('Tool filtering disabled (no toolFilter in config or enabled: false)');
+    }
+
+    function sendToClient(data) {
+      process.stdout.write(data + '\n');
+    }
+
+    const router = new McpRouter({
+      config,
+      siteKeys,
+      isMultiSite,
+      pool,
+      catalog,
+      sendToClient,
+      log,
+    });
+
+    // -----------------------------------------------------------------------
+    // Client STDIO processing
+    // -----------------------------------------------------------------------
+
+    let inputBuffer = '';
+
+    process.stdin.on('data', (chunk) => {
+      inputBuffer += chunk.toString();
+
+      let newlineIdx;
+      while ((newlineIdx = inputBuffer.indexOf('\n')) !== -1) {
+        const line = inputBuffer.slice(0, newlineIdx);
+        inputBuffer = inputBuffer.slice(newlineIdx + 1);
+        if (line.trim()) {
+          let msg;
+          try {
+            msg = JSON.parse(line.trim());
+          } catch (e) {
+            log(`Non-JSON from client (dropped): ${line.substring(0, 200)}`);
+            continue;
+          }
+          router.handleClientMessage(msg, line.trim());
+        }
+      }
+    });
+
+    process.stdin.on('end', () => {
+      log('Client stdin closed — shutting down');
+      shutdown();
+    });
+
+    // -----------------------------------------------------------------------
+    // Startup — connect to default site
+    // -----------------------------------------------------------------------
+
     try {
       const transport = await pool.connectDefault((parsedMsg, rawLine) => {
         router.handleTransportMessage(parsedMsg, rawLine);
@@ -179,24 +214,24 @@ if (!isSubcommandInvocation) {
       process.stderr.write(`abilities-mcp: Failed to connect to default site: ${err.message}\n`);
       process.exit(1);
     }
-  })();
 
-  // -------------------------------------------------------------------------
-  // Signal handling
-  // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // Signal handling
+    // -----------------------------------------------------------------------
 
-  function shutdown() {
-    log('Shutting down');
-    pool.shutdownAll().then(() => {
-      process.exit(0);
-    }).catch(() => {
-      process.exit(1);
+    function shutdown() {
+      log('Shutting down');
+      pool.shutdownAll().then(() => {
+        process.exit(0);
+      }).catch(() => {
+        process.exit(1);
+      });
+    }
+
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+    process.on('unhandledRejection', (reason) => {
+      log(`Unhandled rejection: ${reason}`);
     });
-  }
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
-  process.on('unhandledRejection', (reason) => {
-    log(`Unhandled rejection: ${reason}`);
-  });
+  })();
 }
