@@ -30,7 +30,7 @@ function writeTempConfig(contents) {
 }
 
 describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', () => {
-  it('accepts an OAuth site with mcp_resource and no transport block', () => {
+  it('accepts an OAuth site with mcp_resource and no transport block', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'siteA',
@@ -48,12 +48,12 @@ describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', ()
         },
       },
     });
-    const cfg = loadConfig({ config: file });
+    const cfg = await loadConfig({ config: file });
     assert.equal(cfg.defaultSite, 'siteA');
     assert.equal(cfg.sites.siteA.auth.method, 'oauth');
   });
 
-  it('rejects an OAuth site that is missing mcp_resource', () => {
+  it('rejects an OAuth site that is missing mcp_resource', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'siteA',
@@ -70,10 +70,10 @@ describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', ()
         },
       },
     });
-    assert.throws(() => loadConfig({ config: file }), /mcp_resource/);
+    await assert.rejects(loadConfig({ config: file }), /mcp_resource/);
   });
 
-  it('rejects an OAuth site whose mcp_resource is HTTP without allowInsecure', () => {
+  it('rejects an OAuth site whose mcp_resource is HTTP without allowInsecure', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'siteA',
@@ -91,10 +91,10 @@ describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', ()
         },
       },
     });
-    assert.throws(() => loadConfig({ config: file }), /not HTTPS/);
+    await assert.rejects(loadConfig({ config: file }), /not HTTPS/);
   });
 
-  it('still accepts a legacy v1 App-Password site (no regression)', () => {
+  it('still accepts a legacy v1 App-Password site (no regression)', async () => {
     const file = writeTempConfig({
       defaultSite: 'siteA',
       sites: {
@@ -109,7 +109,7 @@ describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', ()
         },
       },
     });
-    const cfg = loadConfig({ config: file });
+    const cfg = await loadConfig({ config: file });
     assert.equal(cfg.sites.siteA.http.username, 'wp_user');
   });
 });

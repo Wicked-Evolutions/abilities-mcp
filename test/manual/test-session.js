@@ -21,11 +21,11 @@ HttpTransport.prototype._post = function(body) {
 const { loadConfig } = require('./lib/config');
 const { ConnectionPool } = require('./lib/connection-pool');
 
-var config = loadConfig({});
 var log = function() { process.stderr.write('[pool] ' + Array.from(arguments).join(' ') + '\n'); };
-var pool = new ConnectionPool(config, log);
 
 (async function() {
+  var config = await loadConfig({});
+  var pool = new ConnectionPool(config, log);
   var transport = pool._createTransport(config.defaultSite, null);
   transport.onMessage = function(parsed, raw) {
     if (parsed && parsed.result && parsed.result.tools) {
