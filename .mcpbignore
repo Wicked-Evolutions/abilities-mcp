@@ -12,9 +12,17 @@ test/
 .nvmrc
 
 # Operator-specific configs (the bundle uses env vars from manifest user_config)
+# Patterns must catch the dot-form variants the migration helper produces:
+#   wp-sites.json.v1.bak                — created by config-migration's migrateFile()
+#   wp-sites.json.pre-helena-oauth.bak  — operator-side pre-OAuth backup
+# as well as hyphen-suffix variants like wp-sites-antigravity.json.
 wp-sites.json
+wp-sites.json.*
 wp-sites-*.json
 !wp-sites.example.json
+
+# Claude Code worktree artifacts — local agent state, not part of the bundle.
+.claude/
 
 # Docs that don't need to ship inside the bundle
 docs/
