@@ -2,6 +2,26 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [1.5.1] - 2026-05-02
+
+Stretch-to-stable release. Closes the OAuth 2.1 alpha audit pass and the two integration-seam regressions surfaced during Helena's Phase B operator verification, plus the async-config tech-debt sweep that shares the bridge's startup path. No new features, no surface changes — the v1.5.x line is now stable for broader operator adoption.
+
+Companion releases: [abilities-mcp-adapter v1.4.4](https://github.com/Wicked-Evolutions/abilities-mcp-adapter/releases/tag/v1.4.4) and [abilities-for-ai v1.9.1](https://github.com/Wicked-Evolutions/abilities-for-ai/releases/tag/v1.9.1) — coordinated multi-repo release per the Stretch to Stable sprint plan.
+
+### Fixed
+
+- **Schema v1→v2 auto-migration is now actually wired into boot** (PR #25, closes #23). `migrateFile()` shipped in v1.5.0 but the Phase 4/5 OAuth handoff missed the call sites — the migration code existed but never ran. Now invoked at two points before any consumer touches the config: (a) in `abilities-mcp.js` startup before the MCP server reads `wp-sites.json`, and (b) in `lib/cli/index.js`'s `runCommand()` before any subcommand parses the file. Both call sites share a single `KeychainSecretStore` instance. CLI subcommands no longer error with `v<unknown> but CLI expects v2` against legacy v1 configs; the OAuth `add-site` / `upgrade-auth` flows can reach the auth code path on a fresh install. Idempotent — second-run on an already-v2 file is a no-op.
+- **Post-migration v2 apppassword sites validate and connect** (PR #27, closes #26). Helena's Phase B run surfaced a regression: when PR #25's wired migration converted a multi-site v1 config to v2, every non-OAuth site moved to `auth.method: 'apppassword'` with `auth.password_ref`, and the legacy `http.password` / `http.passwordEnv` / `http.passwordCommand` fields were stripped per Appendix F.5 — keychain becomes the sole source of truth. The runtime side still spoke v1 only: `validateSiteConfig()` had no apppassword branch, so v2 sites fell through to the legacy http validator which rejected them with `requires one of http.password, http.passwordEnv, or http.passwordCommand`, and `ConnectionPool._createTransport` had no resolver for `auth.password_ref`. Two parallel branches added (validator + async `resolveSitePassword(site, secretStore)` helper that reads keychain via the SecretStore), pool dispatches on `auth.method === 'apppassword'`, and `KeychainSecretStore` is constructed lazily so SSH-only / v1-only setups still avoid loading keytar. Multi-site acceptance test (1 oauth + 2 apppassword + 1 ssh-carrier) pins the routing.
+
+### Changed
+
+- **Async config loading** (PR #28, closes #5). The boot chain — `resolveConfigFilePath`, `loadConfig`, `loadConfigFile`, `validateSiteConfig`, `resolvePassword` — is async. File reads use `fs.promises`; the `passwordCommand` shell-out goes through `util.promisify(exec)` rather than `execFile` so existing operator configs that rely on shell features (pipes, redirects, `$()` substitution — e.g. `op read 'op://Vault/foo' | tr -d '\n'`) keep working unchanged. `loadConfig` now returns a `Promise`; `abilities-mcp.js`'s bootstrap awaits it (the IIFE was already async per the migration wiring above). Pure-dispatch helpers (`resolveSiteKey`, `buildSiteKeyEnum`, `buildEnvConfig`, `buildLegacyConfig`) stayed synchronous — they have no I/O and converting them would touch every call site for no runtime benefit.
+
+### Internal
+
+- Test count: 237 (+27 since 1.5.0). Node CI matrix: 18, 20, 22.
+- Validator coverage extended: 8 acceptance/reject cases for v2 apppassword (http and ssh carriers, hand-edited reject paths), 9 cases for the async surface (`loadConfig` Promise return, `resolveConfigFilePath` async, `resolvePassword` env / command / shell-feature regression).
+
 ## [1.5.0] - 2026-04-28
 
 OAuth 2.1 release. The bridge is now a full OAuth client: it discovers the authorization server via RFC 9728, performs Dynamic Client Registration (RFC 7591), drives the authorization-code grant with PKCE S256 (RFC 7636) through a loopback browser flow (RFC 8252), persists tokens in the OS keychain, refreshes them automatically, and sends Bearer tokens through the runtime MCP transport.
