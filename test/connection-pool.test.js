@@ -72,6 +72,12 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
   });
 
   it('routes App-Password sites to legacy HttpTransport unchanged (no regression)', async () => {
+    // Post-migration v2 apppassword shape: legacy http.password* fields stripped,
+    // secret in keychain via auth.password_ref. Pool resolves it via the injected
+    // SecretStore.
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteB/apppassword', 'pw');
+
     const config = {
       defaultSite: 'siteB',
       sites: {
@@ -81,7 +87,7 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
           http: {
             endpoint: 'https://siteB.com/wp-json/mcp/mcp-adapter-default-server',
             username: 'wp_user',
-            password: 'pw',
+            password_ref: makeRef(SECRET_SERVICE, 'siteB/apppassword'),
           },
           auth: {
             method: 'apppassword',
@@ -93,12 +99,37 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
       },
     };
 
-    const pool = new ConnectionPool(config, () => {});
+    const pool = new ConnectionPool(config, () => {}, { secretStore: store });
     const transport = await pool._createTransport('siteB', null);
     assert.ok(transport instanceof HttpTransport,
       `expected HttpTransport, got ${transport && transport.constructor && transport.constructor.name}`);
     assert.ok(!(transport instanceof OAuthHttpTransport));
     assert.equal(transport.endpoint, 'https://siteB.com/wp-json/mcp/mcp-adapter-default-server');
+    assert.equal(transport.username, 'wp_user');
+    assert.equal(transport.password, 'pw');
+  });
+
+  it('routes legacy v1 HTTP sites (no auth block) to HttpTransport via sync resolver', async () => {
+    // No SecretStore should be needed — falls through to resolvePassword(http).
+    const config = {
+      defaultSite: 'siteV1',
+      sites: {
+        siteV1: {
+          url: 'https://v1.example.com',
+          transport: 'http',
+          http: {
+            endpoint: 'https://v1.example.com/wp-json/mcp/mcp-adapter-default-server',
+            username: 'v1_user',
+            password: 'v1_pw',
+          },
+        },
+      },
+    };
+    const pool = new ConnectionPool(config, () => {});
+    const transport = await pool._createTransport('siteV1', null);
+    assert.ok(transport instanceof HttpTransport);
+    assert.equal(transport.username, 'v1_user');
+    assert.equal(transport.password, 'v1_pw');
   });
 
   it('routes SSH carrier-only sites to SshTransport unchanged', async () => {
@@ -231,5 +262,143 @@ describe('ConnectionPool — _findExistingHttpTransport handles both transport v
     const pool = new ConnectionPool(config, () => {});
     const found = pool._findExistingHttpTransport('ssh1');
     assert.equal(found, null);
+  });
+});
+
+/**
+ * Issue #26 acceptance — post-migration multi-site v2 config routes every site to
+ * the correct transport. Mirrors the operator-side Phase B reproduction: a v1
+ * config with multiple http sites + an ssh site is migrated to v2 (legacy
+ * http.password* fields stripped, secrets lifted to keychain), and the bridge
+ * must boot and route each site without falling through to the legacy http
+ * validator's "requires one of http.password..." check.
+ */
+describe('ConnectionPool — multi-site v2 acceptance (Issue #26)', () => {
+  it('routes 1 oauth + 2 apppassword (http) + 1 ssh-carrier site to the correct transports', async () => {
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'helena/access', 'AT');
+    await store.set(SECRET_SERVICE, 'helena/refresh', 'RT');
+    await store.set(SECRET_SERVICE, 'wicked/apppassword', 'wicked-pw');
+    await store.set(SECRET_SERVICE, 'tnn/apppassword', 'tnn-pw');
+    await store.set(SECRET_SERVICE, 'sshcarrier/apppassword', '');
+
+    const tm = new TokenManager({ secretStore: store, allowInsecure: true });
+
+    const config = {
+      schema_version: 2,
+      defaultSite: 'helena',
+      sites: {
+        helena: {
+          url: 'https://helenawillow.com',
+          mcp_resource: 'https://helenawillow.com/wp-json/mcp/mcp-adapter-default-server',
+          auth: {
+            method: 'oauth',
+            client_id: 'client-h',
+            access_token_ref: makeRef(SECRET_SERVICE, 'helena/access'),
+            refresh_token_ref: makeRef(SECRET_SERVICE, 'helena/refresh'),
+            access_token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+            refresh_token_expires_at: new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
+          },
+          auth_status: 'active',
+        },
+        wicked: {
+          url: 'https://wickedevolutions.com',
+          transport: 'http',
+          http: {
+            endpoint: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+            username: 'wicked_user',
+            password_ref: makeRef(SECRET_SERVICE, 'wicked/apppassword'),
+          },
+          auth: {
+            method: 'apppassword',
+            username: 'wicked_user',
+            password_ref: makeRef(SECRET_SERVICE, 'wicked/apppassword'),
+          },
+          auth_status: 'active',
+        },
+        tnn: {
+          url: 'https://thinknicenow.com',
+          transport: 'http',
+          http: {
+            endpoint: 'https://thinknicenow.com/wp-json/mcp/mcp-adapter-default-server',
+            username: 'tnn_user',
+            password_ref: makeRef(SECRET_SERVICE, 'tnn/apppassword'),
+          },
+          auth: {
+            method: 'apppassword',
+            username: 'tnn_user',
+            password_ref: makeRef(SECRET_SERVICE, 'tnn/apppassword'),
+          },
+          auth_status: 'active',
+        },
+        sshcarrier: {
+          url: 'ssh://shared.example',
+          transport: 'ssh',
+          ssh: { host: 'shared.example', path: '/var/www/wp', user: 'deploy' },
+          auth: {
+            method: 'apppassword',
+            username: 'deploy',
+            password_ref: makeRef(SECRET_SERVICE, 'sshcarrier/apppassword'),
+          },
+          auth_status: 'active',
+        },
+      },
+    };
+
+    const pool = new ConnectionPool(config, () => {}, {
+      secretStore: store,
+      tokenManager: tm,
+      discover: fakeDiscover(),
+      allowInsecure: true,
+    });
+
+    const helenaT = await pool._createTransport('helena', null);
+    assert.ok(helenaT instanceof OAuthHttpTransport, 'helena should route to OAuthHttpTransport');
+    assert.equal(helenaT.endpoint, 'https://helenawillow.com/wp-json/mcp/mcp-adapter-default-server');
+
+    const wickedT = await pool._createTransport('wicked', null);
+    assert.ok(wickedT instanceof HttpTransport, 'wicked should route to HttpTransport');
+    assert.ok(!(wickedT instanceof OAuthHttpTransport));
+    assert.equal(wickedT.username, 'wicked_user');
+    assert.equal(wickedT.password, 'wicked-pw');
+
+    const tnnT = await pool._createTransport('tnn', null);
+    assert.ok(tnnT instanceof HttpTransport, 'tnn should route to HttpTransport');
+    assert.equal(tnnT.username, 'tnn_user');
+    assert.equal(tnnT.password, 'tnn-pw');
+
+    const sshT = await pool._createTransport('sshcarrier', null);
+    assert.ok(sshT instanceof SshTransport, 'sshcarrier should route to SshTransport');
+  });
+
+  it('rejects v2 apppassword http sites that lost auth.password_ref during a hand-edit', async () => {
+    // Defensive — operator-edited configs should fail validation rather than
+    // crash deeper in the resolver.
+    const { loadConfig } = require('../lib/config');
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const file = path.join(os.tmpdir(), `wp-sites.test.${process.pid}.${Date.now()}.json`);
+    fs.writeFileSync(file, JSON.stringify({
+      schema_version: 2,
+      defaultSite: 'broken',
+      sites: {
+        broken: {
+          url: 'https://broken.example',
+          transport: 'http',
+          http: {
+            endpoint: 'https://broken.example/wp-json/mcp/mcp-adapter-default-server',
+            username: 'u',
+          },
+          auth: { method: 'apppassword', username: 'u' },
+          auth_status: 'active',
+        },
+      },
+    }), { mode: 0o600 });
+    try {
+      assert.throws(() => loadConfig({ config: file }), /password_ref/);
+    } finally {
+      try { fs.unlinkSync(file); } catch { /* ignore */ }
+    }
   });
 });
