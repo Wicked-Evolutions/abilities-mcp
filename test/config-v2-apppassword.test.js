@@ -36,7 +36,7 @@ function writeTempConfig(contents) {
 }
 
 describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
-  it('accepts an apppassword/http site with auth.password_ref and no legacy http.password', () => {
+  it('accepts an apppassword/http site with auth.password_ref and no legacy http.password', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'wicked',
@@ -58,11 +58,11 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         },
       },
     });
-    const cfg = loadConfig({ config: file });
+    const cfg = await loadConfig({ config: file });
     assert.equal(cfg.sites.wicked.auth.method, 'apppassword');
   });
 
-  it('accepts an apppassword/ssh carrier site (no http block)', () => {
+  it('accepts an apppassword/ssh carrier site (no http block)', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'sshc',
@@ -80,11 +80,11 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         },
       },
     });
-    const cfg = loadConfig({ config: file });
+    const cfg = await loadConfig({ config: file });
     assert.equal(cfg.sites.sshc.transport, 'ssh');
   });
 
-  it('rejects an apppassword site missing auth.username', () => {
+  it('rejects an apppassword site missing auth.username', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'x',
@@ -97,10 +97,10 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         },
       },
     });
-    assert.throws(() => loadConfig({ config: file }), /auth\.username/);
+    await assert.rejects(loadConfig({ config: file }), /auth\.username/);
   });
 
-  it('rejects an apppassword site missing auth.password_ref', () => {
+  it('rejects an apppassword site missing auth.password_ref', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'x',
@@ -113,10 +113,10 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         },
       },
     });
-    assert.throws(() => loadConfig({ config: file }), /password_ref/);
+    await assert.rejects(loadConfig({ config: file }), /password_ref/);
   });
 
-  it('rejects an apppassword/http site missing http.endpoint', () => {
+  it('rejects an apppassword/http site missing http.endpoint', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'x',
@@ -133,10 +133,10 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         },
       },
     });
-    assert.throws(() => loadConfig({ config: file }), /http\.endpoint/);
+    await assert.rejects(loadConfig({ config: file }), /http\.endpoint/);
   });
 
-  it('rejects an apppassword/ssh site missing ssh.host or ssh.path', () => {
+  it('rejects an apppassword/ssh site missing ssh.host or ssh.path', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'x',
@@ -153,10 +153,10 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         },
       },
     });
-    assert.throws(() => loadConfig({ config: file }), /ssh\.host and ssh\.path/);
+    await assert.rejects(loadConfig({ config: file }), /ssh\.host and ssh\.path/);
   });
 
-  it('rejects an apppassword/http site whose endpoint is HTTP without allowInsecure', () => {
+  it('rejects an apppassword/http site whose endpoint is HTTP without allowInsecure', async () => {
     const file = writeTempConfig({
       schema_version: 2,
       defaultSite: 'x',
@@ -173,10 +173,10 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         },
       },
     });
-    assert.throws(() => loadConfig({ config: file }), /not HTTPS/);
+    await assert.rejects(loadConfig({ config: file }), /not HTTPS/);
   });
 
-  it('still accepts a legacy v1 apppassword shape (no auth block) — no regression', () => {
+  it('still accepts a legacy v1 apppassword shape (no auth block) — no regression', async () => {
     const file = writeTempConfig({
       defaultSite: 'legacy',
       sites: {
@@ -191,7 +191,7 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         },
       },
     });
-    const cfg = loadConfig({ config: file });
+    const cfg = await loadConfig({ config: file });
     assert.equal(cfg.sites.legacy.http.password, 'pw');
   });
 });

@@ -396,7 +396,7 @@ describe('ConnectionPool — multi-site v2 acceptance (Issue #26)', () => {
       },
     }), { mode: 0o600 });
     try {
-      assert.throws(() => loadConfig({ config: file }), /password_ref/);
+      await assert.rejects(loadConfig({ config: file }), /password_ref/);
     } finally {
       try { fs.unlinkSync(file); } catch { /* ignore */ }
     }

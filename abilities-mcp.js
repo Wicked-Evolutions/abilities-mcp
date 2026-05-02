@@ -71,7 +71,8 @@ if (isSubcommandInvocation) {
 // ---------------------------------------------------------------------------
 // MCP server mode — the original CLI argument parsing (no subcommand).
 // Skipped when a subcommand was dispatched above; otherwise we'd race the
-// IIFE's process.exit() against the synchronous loadConfig() / connectDefault().
+// IIFE's process.exit() against the bootstrap that awaits loadConfig() and
+// connectDefault().
 // ---------------------------------------------------------------------------
 
 if (!isSubcommandInvocation) {
@@ -116,7 +117,7 @@ if (!isSubcommandInvocation) {
   // no on-disk wp-sites.json; `resolveConfigFilePath` returns null and we
   // skip migration entirely.
   (async function bootstrap() {
-    const filePath = resolveConfigFilePath(args);
+    const filePath = await resolveConfigFilePath(args);
     if (filePath) {
       try {
         const result = await migrateFile({
@@ -134,7 +135,7 @@ if (!isSubcommandInvocation) {
 
     let config;
     try {
-      config = loadConfig(args);
+      config = await loadConfig(args);
     } catch (err) {
       process.stderr.write(`abilities-mcp: ${err.message}\n`);
       process.exit(1);
