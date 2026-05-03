@@ -24,6 +24,7 @@
 
 const { createLogger } = require('./lib/logger');
 const { loadConfig, buildSiteKeyEnum, resolveConfigFilePath } = require('./lib/config');
+const { formatConfigSourceLine } = require('./lib/config-source-line');
 const { ConnectionPool } = require('./lib/connection-pool');
 const { ToolCatalog } = require('./lib/tool-catalog');
 const { McpRouter } = require('./lib/router');
@@ -140,6 +141,13 @@ if (!isSubcommandInvocation) {
       process.stderr.write(`abilities-mcp: ${err.message}\n`);
       process.exit(1);
     }
+
+    // Emit a single config-source line to stderr so operators can diagnose
+    // which mode the bridge is in at a glance (Claude Desktop's MCP log
+    // captures the server's stderr stream). Always-on, not gated by --debug:
+    // operator-visibility is the entire point of #32 and createLogger is a
+    // debug-only file logger that wouldn't reach Claude Desktop's log.
+    process.stderr.write(formatConfigSourceLine(config) + '\n');
 
     const isMultiSite = config._isMultiSite;
     const siteKeys = buildSiteKeyEnum(config);

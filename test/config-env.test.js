@@ -14,7 +14,8 @@ describe('buildEnvConfig', () => {
 
     assert.equal(config.defaultSite, 'default');
     assert.equal(config._isMultiSite, false);
-    assert.equal(config._configSource, 'env');
+    assert.equal(config._configSource, 'env-var');
+    assert.equal(config._configSourceLabel, 'example.com');
 
     const site = config.sites.default;
     assert.equal(site.transport, 'http');
