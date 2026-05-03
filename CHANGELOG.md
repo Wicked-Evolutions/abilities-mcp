@@ -2,6 +2,36 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [1.5.2] - 2026-05-03
+
+**OAuth flow now works inside `.mcpb`.** This release makes the documented `.mcpb` operator UX work end-to-end: install the extension from Claude Desktop with an Application Password, then run `abilities-mcp upgrade-auth <site>` from a terminal to migrate that single connection to OAuth in place, then `abilities-mcp add-site https://other.com` to add more sites — all surfacing through the same Claude Desktop "Abilities MCP" entry. Before this release, the keytar binary wasn't bundled with the `.mcpb` and the `.mcpb` install never persisted to `~/.abilities-mcp/wp-sites.json`, so the documented progression failed at the moment OAuth touched the keychain.
+
+Bridge-only release — no companion adapter or ai release this sprint.
+
+### Fixed
+
+- **`.mcpb` bundle now ships keytar prebuilds for darwin x64, darwin arm64, win32 x64, and linux x64** (PR [#35](https://github.com/Wicked-Evolutions/abilities-mcp/pull/35), closes [#33](https://github.com/Wicked-Evolutions/abilities-mcp/issues/33)). Without these, `KeychainSecretStore` failed at first request with `Cannot find module 'keytar'` even on the host platform — verified empirically against the v1.5.1 bundle. The pack pipeline moves from a single-line `mcpb pack` invocation to a staging-directory build (`scripts/pack-mcpb.js`) that fetches each platform's prebuild via `prebuild-install` and patches keytar's hardcoded single-slot loader (`var keytar = require('../build/Release/keytar.node')` in keytar 7.9.0) with a multi-platform-aware loader keyed on `process.platform`-`process.arch`. The patch is staging-only — `node_modules/keytar/` in the project tree is byte-identical pre-pack and post-pack, pinned by the new `scripts/verify-pack-isolation.js` (run via `npm run verify:pack-isolation`). Pre-patch substring assertion on the upstream loader fails loud if a future keytar bump changes the loader shape.
+
+- **Bridge emits one operator-visible `Config source:` line on startup to stderr** (PR [#36](https://github.com/Wicked-Evolutions/abilities-mcp/pull/36), closes [#32](https://github.com/Wicked-Evolutions/abilities-mcp/issues/32)). Captured in Claude Desktop's per-server MCP log so the operator can tell at a glance which `loadConfig` source won. Names the source (`env-var` / `[explicit-config]` / `[script-adjacent]` / `[home-dir]` / `legacy-cli`), the file path (tildified) or hostname, the site count, and the per-site auth method. Sample output:
+  ```
+  Config source: ABILITIES_MCP_URL env var (single-site basic auth: example.com as wp_user)
+  Config source: [home-dir] ~/.abilities-mcp/wp-sites.json (3 sites: helena oauth, wicked oauth, tnn apppassword)
+  ```
+  No secrets — only IDs, methods, hostnames, paths, counts. Always-on, not gated by `--debug`.
+
+- **`.mcpb` install seeds `~/.abilities-mcp/wp-sites.json` on first launch** (PR [#37](https://github.com/Wicked-Evolutions/abilities-mcp/pull/37), closes [#34](https://github.com/Wicked-Evolutions/abilities-mcp/issues/34)). When the env-var-mode bridge boots and the home-dir config doesn't exist, `seedFromEnvIfMissing` writes a v2 apppassword entry derived from the `ABILITIES_MCP_*` env vars before serving the first MCP request. `list-sites`, `upgrade-auth`, and `add-site` now operate on a single source of truth that already includes the `.mcpb`-installed site. The site-id is derived from the URL hostname, matching `add-site`'s `deriveSiteId`. Guards: pre-existing `wp-sites.json` is **never overwritten**; missing env vars / malformed URL / keytar unavailable → graceful no-op (bridge falls back to env-var-only mode); file-write failure → keychain entry rolled back so operators don't accumulate orphan secrets.
+
+### Changed
+
+- **keytar pinned `^7.9.0` → `~7.9.0`** (patch versions only) so the staging script's pre-patch loader-shape substring assertion has a stable target. CLI install behavior is unchanged — keytar stays in `optionalDependencies` (skips gracefully on platforms without prebuilds).
+- **`_configSource` discriminant renamed `'env'` → `'env-var'`** to align with the documented set (`explicit-config`, `script-adjacent`, `home-dir`, `env-var`, `legacy-cli`). Internal field, prefixed with underscore; only one test was reading the prior value (updated).
+
+### Internal
+
+- **Bundle size:** `~115 kB → ~413 kB` packed / `~1.2 MB` unpacked. The four platform-specific keytar prebuilds (darwin-x64 ~83 kB, darwin-arm64 ~99 kB, win32-x64 ~707 kB, linux-x64 ~76 kB) are embedded for the `.mcpb` install path. CLI install paths are unaffected — keytar stays in `optionalDependencies` and is host-only via the operator's `npm install`.
+- **Test count:** `237 → 265` (+28 across the sprint: 0 new in PR #35, +15 in PR #36, +13 in PR #37). Node CI matrix unchanged: 18, 20, 22.
+- New maintenance scripts: `npm run pack:mcpb` (staging build + multi-platform prebuild fetch), `npm run verify:pack-isolation` (asserts `node_modules/keytar/` byte-identity across pack runs).
+
 ## [1.5.1] - 2026-05-02
 
 Stretch-to-stable release. Closes the OAuth 2.1 alpha audit pass and the two integration-seam regressions surfaced during Helena's Phase B operator verification, plus the async-config tech-debt sweep that shares the bridge's startup path. No new features, no surface changes — the v1.5.x line is now stable for broader operator adoption.
