@@ -17,12 +17,13 @@
   "scripts": {
     "test": "node --test test/*.test.js test/auth/*.test.js test/cli/*.test.js test/transports/*.test.js",
     "validate:mcpb": "npx --yes @anthropic-ai/mcpb validate manifest.json",
-    "pack:mcpb": "npx --yes @anthropic-ai/mcpb pack . abilities-mcp.mcpb"
+    "pack:mcpb": "node scripts/pack-mcpb.js",
+    "verify:pack-isolation": "node scripts/verify-pack-isolation.js"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "optionalDependencies": {
-    "keytar": "^7.9.0"
+    "keytar": "~7.9.0"
   }
 }
