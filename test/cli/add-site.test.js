@@ -11,6 +11,7 @@ const {
   deriveSubsiteSlug,
 } = require('../../lib/cli/multisite-probe');
 const { SCHEMA_VERSION } = require('../../lib/auth/schema-v2');
+const { DEFAULT_SCOPE } = require('../../lib/auth/oauth-client');
 
 describe('CLI add-site', () => {
   describe('site-id derivation', () => {
@@ -247,7 +248,11 @@ describe('CLI add-site', () => {
 
       const advisory = r.errLines.join('\n');
       assert.match(advisory, /Multisite discovery skipped/);
+      // Advisory must surface BOTH possible causes (#45) — capability gate
+      // AND OAuth-scope gate — so operators don't chase the wrong one.
       assert.match(advisory, /manage_network_options/);
+      assert.match(advisory, /abilities:multisite:read/);
+      assert.match(advisory, /consent screen/);
       assert.match(advisory, /permd/);
     });
 
@@ -270,6 +275,131 @@ describe('CLI add-site', () => {
       assert.match(advisory, /Multisite discovery failed/);
       assert.match(advisory, /ETIMEDOUT/);
       assert.match(advisory, /neterr/);
+    });
+  });
+
+  describe('DCR multisite scope request (Issue #45)', () => {
+    let server;
+    let h;
+    before(async () => { server = await new MockAuthServer().start(); });
+    after(async () => { await server.stop(); });
+    afterEach(() => { if (h) h.cleanup(); });
+
+    it('DEFAULT_SCOPE includes the multisite scopes the probe needs', () => {
+      // Naming verified against adapter ScopeRegistry SENSITIVE_SCOPES
+      // (src/Auth/OAuth/ScopeRegistry.php:43-44). These scopes are excluded
+      // from the abilities:read / abilities:write umbrella expansion by
+      // design, so they must be requested explicitly during DCR.
+      assert.match(DEFAULT_SCOPE, /\babilities:read\b/);
+      assert.match(DEFAULT_SCOPE, /\babilities:write\b/);
+      assert.match(DEFAULT_SCOPE, /\babilities:multisite:read\b/);
+      assert.match(DEFAULT_SCOPE, /\babilities:multisite:write\b/);
+    });
+
+    it('add-site DCR registration includes the multisite scopes', async () => {
+      h = makeHarness({
+        deps: {
+          oauthClientDeps: autoConsentDeps(),
+          // Stub probe — we only care about DCR body for this test.
+          probeMultisite: async () => ({ block: null, reason: 'single-site' }),
+        },
+      });
+
+      const r = await h.runCli('add-site', [server.siteUrl, '--site-id=dcrscope']);
+      assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+
+      // The mock records the DCR body keyed by issued client_id. The most
+      // recently issued client is this run's registration.
+      const issued = Array.from(server._issuedClients.values());
+      const dcrBody = issued[issued.length - 1].body;
+      assert.ok(dcrBody, 'DCR body should be recorded by mock');
+      assert.match(dcrBody.scope, /\babilities:multisite:read\b/,
+        'DCR scope must include abilities:multisite:read so consent can grant it');
+      assert.match(dcrBody.scope, /\babilities:multisite:write\b/,
+        'DCR scope must include abilities:multisite:write for symmetry');
+      // Existing umbrella scopes still requested.
+      assert.match(dcrBody.scope, /\babilities:read\b/);
+      assert.match(dcrBody.scope, /\babilities:write\b/);
+    });
+
+    it('granted multisite scope ends up in wp-sites.json after super-admin consent', async () => {
+      // Simulate a super-admin operator on a Multisite Network root: the
+      // adapter's consent screen surfaces the multisite scope and the
+      // operator grants it. The token endpoint reflects the grant in the
+      // `scope` field, which add-site persists to auth.scopes.
+      const grantedScope = 'abilities:read abilities:write abilities:multisite:read abilities:multisite:write';
+      const superAdminServer = await new MockAuthServer({
+        tokenJson: {
+          access_token: 'at-superadmin-test',
+          refresh_token: 'rt-superadmin-test',
+          token_type: 'Bearer',
+          expires_in: 3600,
+          scope: grantedScope,
+        },
+      }).start();
+      try {
+        h = makeHarness({
+          deps: {
+            oauthClientDeps: autoConsentDeps(),
+            // Stub probe — assertion is about persisted scopes, not the
+            // probe round-trip (which has its own dedicated tests).
+            probeMultisite: async () => ({
+              block: { main: superAdminServer.siteUrl },
+              reason: 'multisite-root',
+            }),
+          },
+        });
+
+        const r = await h.runCli('add-site', [
+          superAdminServer.siteUrl, '--site-id=superadmin',
+        ]);
+        assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+
+        const cfg = h.readConfig();
+        const scopes = cfg.sites.superadmin.auth.scopes;
+        assert.ok(scopes.includes('abilities:multisite:read'),
+          `expected granted scopes to include abilities:multisite:read, got: ${scopes.join(', ')}`);
+        assert.ok(scopes.includes('abilities:multisite:write'),
+          `expected granted scopes to include abilities:multisite:write, got: ${scopes.join(', ')}`);
+      } finally {
+        await superAdminServer.stop();
+      }
+    });
+
+    it('single-site path: scopes requested but adapter grants only umbrella, no multisite block', async () => {
+      // Single-site WP: DCR includes the multisite scopes (we always
+      // request them now), but the adapter doesn't grant them because
+      // the OAuth user lacks WP capability — the mock token endpoint's
+      // default `scope` field does not include them. Site entry must
+      // still be written without a multisite block, exactly as before.
+      h = makeHarness({
+        deps: {
+          oauthClientDeps: autoConsentDeps(),
+          probeMultisite: async () => {
+            // Tool-not-registered mirrors what a non-multisite WP would
+            // return — multisite-abilities.php bails early when
+            // is_multisite() is false, so the ability isn't registered.
+            const e = new Error('Method not found');
+            e.code = 'tool_not_registered';
+            throw e;
+          },
+        },
+      });
+
+      const r = await h.runCli('add-site', [server.siteUrl, '--site-id=ss']);
+      assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+      assert.equal(r.errLines.length, 0,
+        'single-site path must remain silent — no advisory expected');
+
+      const cfg = h.readConfig();
+      assert.equal(cfg.sites.ss.multisite, undefined,
+        'no multisite block on single-site install — graceful degrade preserved');
+      assert.equal(cfg.sites.ss.auth.method, 'oauth');
+
+      // DCR was still asked for the multisite scopes — the gate is server-side.
+      const issued = Array.from(server._issuedClients.values());
+      const dcrBody = issued[issued.length - 1].body;
+      assert.match(dcrBody.scope, /\babilities:multisite:read\b/);
     });
   });
 
