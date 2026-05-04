@@ -2,6 +2,26 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [1.5.3] - 2026-05-04
+
+**macOS hotfix: OAuth in Claude Desktop's `.mcpb` runtime now works.** Hotfix to v1.5.2's `.mcpb` operator UX on macOS. v1.5.2 shipped with keytar prebuilds bundled, but Claude Desktop's hardened-runtime host process on macOS rejects native modules with mismatched code-signing Team IDs — a system-level macOS protection that applies to every hardened app, not a Claude Desktop quirk. This blocked OAuth inside Claude Desktop's `.mcpb` runtime even though the bundle itself is structurally correct (loads cleanly via system Node from the extracted `.mcpb`). The hotfix adds a darwin-only shell-out to the macOS `security` CLI when keytar fails to load. Validated end-to-end on darwin-arm64 by an operator running the documented progression (install `.mcpb` → `upgrade-auth` → `add-site` → multi-site OAuth in the same Claude Desktop entry, read and write confirmed live on two production WordPress sites via OAuth bearer) before release.
+
+Bridge-only release — no companion adapter or ai release this hotfix.
+
+### Fixed
+
+- **`KeychainSecretStore` falls back to the macOS `security` CLI when keytar fails to load on darwin** (PR [#40](https://github.com/Wicked-Evolutions/abilities-mcp/pull/40), closes [#39](https://github.com/Wicked-Evolutions/abilities-mcp/issues/39)). When `require('keytar')` throws on darwin (the hardened-runtime Team ID mismatch), `_load()` sets `_fallbackMode = 'security-cli'` instead of throwing. `get` / `set` / `delete` then dispatch to `security find-generic-password -w` / `add-generic-password -U` / `delete-generic-password` via `child_process.execFile` (no shell — argv passes verbatim, no shell-injection surface). `findAll` returns `[]` in fallback mode (security CLI has no clean enumerate-by-service; the bridge runtime path doesn't depend on it — only the CLI subcommand `list-sites` does, which runs in system Node where keytar loads normally). Stderr matching `/could not be found/i` maps to keytar's null (get) / false (delete) return semantics; other stderr propagates as `SecretStoreError` code `security_cli_failed`. `isAvailable()` returns true in both keytar and fallback modes. **Linux/Windows behavior unchanged** — keytar load failures on those platforms still throw `keytar_unavailable` (no fallback engaged; the security CLI is darwin-only). Test seams (`requireKeytar`, `platform`, `exec` injection on the constructor) added for fallback-path unit testing without breaking the test runtime's real `require('keytar')`. New `test/auth/keychain-secret-store-darwin-fallback.test.js` covers keytar-success preservation, fallback engagement on darwin, "could not be found" mapping, error propagation, `isAvailable` in both modes, linux/win32 throw-not-fallback, and `findAll` in fallback mode. The first time the `.mcpb`-installed bridge accesses a keychain entry on darwin, macOS will prompt for keychain access — operator clicks "Always Allow" once per entry and the prompt persists thereafter. This is a macOS keychain ACL property; the same prompt would have appeared with keytar-native if it had loaded.
+
+### Internal
+
+- **Test count:** `265 → 275` (+10 in `keychain-secret-store-darwin-fallback.test.js`).
+- **Bundle size unchanged** (~420 kB packed, ~1.3 MB unpacked — the four platform-specific keytar binaries dominate; the secret-store code change is small relative to that).
+
+### Known unverified — research outstanding for a follow-up release
+
+- **Linux:** whether keytar's libsecret native binding loads cleanly inside Linux Claude Desktop's `.mcpb` runtime is unverified. Likely works (Linux's runtime model differs from macOS — no Team ID matching), but no Linux Claude Desktop access during this hotfix to test empirically. Operators on Linux Claude Desktop should test and report.
+- **Windows:** whether keytar's win32 native binding loads cleanly inside Windows Claude Desktop's hardened process is unverified. If it doesn't, a separate Windows-specific fix shape is needed (PowerShell credential cmdlets, or formally limiting Windows operators to the CLI install path). Tracked for a follow-up release.
+
 ## [1.5.2] - 2026-05-03
 
 **OAuth flow now works inside `.mcpb`.** This release makes the documented `.mcpb` operator UX work end-to-end: install the extension from Claude Desktop with an Application Password, then run `abilities-mcp upgrade-auth <site>` from a terminal to migrate that single connection to OAuth in place, then `abilities-mcp add-site https://other.com` to add more sites — all surfacing through the same Claude Desktop "Abilities MCP" entry. Before this release, the keytar binary wasn't bundled with the `.mcpb` and the `.mcpb` install never persisted to `~/.abilities-mcp/wp-sites.json`, so the documented progression failed at the moment OAuth touched the keychain.
