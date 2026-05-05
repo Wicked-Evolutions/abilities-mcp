@@ -2,6 +2,16 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **OAuth subsite routing actually targets the subsite host (Issue [#48](https://github.com/Wicked-Evolutions/abilities-mcp/issues/48), Public Alpha Hardening Phase A.1).** v1.5.4 wrote the `multisite` block on add-site but the OAuth dispatch path ignored the resolved subsite endpoint — every `<network-id>.<subsite-slug>` ability call was POSTed to the network root, so WordPress booted blog 1 regardless of which subsite was named. Three connected fixes:
+  - `lib/config.js:resolveSiteKey` now derives `resolvedEndpoint` for OAuth subsites (was HTTP/App-Password only). OAuth sites carry their endpoint on `mcp_resource`, not `http.endpoint`, so the substitution branch never fired for the OAuth case.
+  - `lib/connection-pool.js:_createTransport` passes `{ resolvedEndpoint, subsiteUrl: finalSubsiteUrl }` through to the OAuth branch, mirroring the HTTP branch's pattern. `_createOAuthHttpTransport` uses `resolvedEndpoint || siteConfig.mcp_resource` and forwards `subsiteUrl` to the transport.
+  - `lib/connection-pool.js:_findExistingHttpTransport` dedupes OAuth subsites by `resolvedEndpoint || mcp_resource` (was always `mcp_resource`). Without this, the cached network-root transport was returned for every subsite key, making the endpoint fix functionally inert behind the cache lookup.
+  - `lib/transports/oauth-http-transport.js` accepts `subsiteUrl` and forwards it on every POST as `X-Abilities-MCP-Subsite-URL`. Subdomain-style multisite (the alpha-locked scope) routes by host in the endpoint URL and does not need the header; it's forward-looking infrastructure for path-style multisite (Phase B) so the adapter can `switch_to_blog()` per request without re-parsing the request URL.
+
 ## [1.5.4] - 2026-05-04
 
 This release lands the bridge-side foundations for the multisite UX promised in [#43](https://github.com/Wicked-Evolutions/abilities-mcp/issues/43). `add-site` now requests multisite OAuth scopes during DCR (so super-admin operators consent through the standard consent flow), runs a one-shot `multisite/list-sites` probe after OAuth completes, and on success writes a slug→subsite-URL `multisite` block to `wp-sites.json` so the bridge's existing dot-notation routing serves multi-site OAuth in any AI client without operator JSON editing. End-to-end dot-notation routing validated on darwin-arm64 against a 4-subsite multisite by manually populating the block from the verified `multisite/list-sites` response.

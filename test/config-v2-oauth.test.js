@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { loadConfig } = require('../lib/config');
+const { loadConfig, resolveSiteKey } = require('../lib/config');
 
 /**
  * The runtime config loader must accept v2 OAuth sites (which carry no
@@ -111,5 +111,94 @@ describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', ()
     });
     const cfg = await loadConfig({ config: file });
     assert.equal(cfg.sites.siteA.http.username, 'wp_user');
+  });
+});
+
+/**
+ * resolveSiteKey — multisite endpoint derivation (Issue #48).
+ *
+ * Subdomain-style multisite routes by URL host. The pool relies on
+ * resolveSiteKey to substitute the subsite's origin into the parent
+ * endpoint path so the OAuth and HTTP branches can post to the correct
+ * blog. Before the fix, OAuth subsite keys returned resolvedEndpoint=null
+ * because the substitution branch only fired for site.transport === 'http'
+ * — and OAuth sites carry no `transport` block.
+ */
+describe('resolveSiteKey — multisite endpoint derivation (Issue #48)', () => {
+  function makeOAuthMultisiteConfig() {
+    return {
+      sites: {
+        wickedevolutions: {
+          url: 'https://wickedevolutions.com',
+          mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+          auth: {
+            method: 'oauth',
+            client_id: 'client-x',
+            access_token_ref: 'keychain://abilities-mcp/we/access',
+            refresh_token_ref: 'keychain://abilities-mcp/we/refresh',
+          },
+          auth_status: 'active',
+          multisite: {
+            main: 'https://wickedevolutions.com',
+            community: 'https://community.wickedevolutions.com',
+            test1: 'https://test1.wickedevolutions.com',
+            knowledge: 'https://knowledge.wickedevolutions.com',
+          },
+        },
+      },
+    };
+  }
+
+  it('OAuth subsite resolves to subsite-host endpoint (was null before #48)', () => {
+    const config = makeOAuthMultisiteConfig();
+    const r = resolveSiteKey(config, 'wickedevolutions.community');
+    assert.equal(r.subsiteUrl, 'https://community.wickedevolutions.com');
+    assert.equal(
+      r.resolvedEndpoint,
+      'https://community.wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+      'subsite endpoint must use the subsite host so multisite routes by URL'
+    );
+  });
+
+  it('every OAuth subsite resolves to its own host (no shared-network-root regression)', () => {
+    const config = makeOAuthMultisiteConfig();
+    const subsites = ['main', 'community', 'test1', 'knowledge'];
+    const endpoints = subsites.map((s) => resolveSiteKey(config, `wickedevolutions.${s}`).resolvedEndpoint);
+    // Every endpoint distinct (sanity — bug had them all equal to the network root).
+    const uniq = new Set(endpoints);
+    assert.equal(uniq.size, subsites.length, `expected 4 distinct subsite endpoints, got ${[...uniq].join(' | ')}`);
+    // Each endpoint's host matches its subsite's host.
+    for (let i = 0; i < subsites.length; i++) {
+      const expectedHost = new URL(config.sites.wickedevolutions.multisite[subsites[i]]).hostname;
+      const actualHost = new URL(endpoints[i]).hostname;
+      assert.equal(actualHost, expectedHost, `subsite "${subsites[i]}" endpoint host mismatch`);
+    }
+  });
+
+  it('OAuth single-site (no dot suffix) returns null resolvedEndpoint', () => {
+    // Single-site keys return the raw siteConfig with no subsite resolution;
+    // the pool then falls back to siteConfig.mcp_resource as the endpoint.
+    const config = makeOAuthMultisiteConfig();
+    const r = resolveSiteKey(config, 'wickedevolutions');
+    assert.equal(r.subsiteUrl, null);
+    assert.equal(r.resolvedEndpoint, null);
+  });
+
+  it('HTTP App-Password subsite resolution still works (no regression)', () => {
+    const config = {
+      sites: {
+        wp: {
+          url: 'https://example.com',
+          transport: 'http',
+          http: { endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server' },
+          multisite: { sub: 'https://sub.example.com' },
+        },
+      },
+    };
+    const r = resolveSiteKey(config, 'wp.sub');
+    assert.equal(
+      r.resolvedEndpoint,
+      'https://sub.example.com/wp-json/mcp/mcp-adapter-default-server'
+    );
   });
 });
