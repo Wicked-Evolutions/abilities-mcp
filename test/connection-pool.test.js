@@ -248,6 +248,51 @@ describe('ConnectionPool — _findExistingHttpTransport handles both transport v
     assert.equal(found.key, 'siteA');
   });
 
+  it('OAuth multisite subsite dedupes by subsite endpoint, NOT by network root (Issue #48)', async () => {
+    // Pre-fix bug: targetEndpoint = siteConfig.mcp_resource always, so
+    // wickedevolutions.community looking for an existing transport found
+    // the cached `wickedevolutions` (network root) transport and reused it.
+    // Outcome: every subsite call landed on blog 1.
+    //
+    // Post-fix: targetEndpoint = resolvedEndpoint || siteConfig.mcp_resource,
+    // so subsite keys dedupe against subsite-host transports only.
+    const config = {
+      defaultSite: 'wicked',
+      sites: {
+        wicked: {
+          url: 'https://wickedevolutions.com',
+          mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+          auth: { method: 'oauth', client_id: 'x',
+            access_token_ref: 'keychain://abilities-mcp/w/access',
+            refresh_token_ref: 'keychain://abilities-mcp/w/refresh' },
+          auth_status: 'active',
+          multisite: {
+            main: 'https://wickedevolutions.com',
+            community: 'https://community.wickedevolutions.com',
+          },
+        },
+      },
+    };
+    const pool = new ConnectionPool(config, () => {});
+    // Seed cache with the network-root transport (parent / .main lookup path).
+    const networkRootTransport = { endpoint: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server' };
+    pool.transports.set('wicked', networkRootTransport);
+
+    // Before #48: this returned the network-root transport. After #48: returns null,
+    // so the pool builds a fresh subsite-host transport.
+    const community = pool._findExistingHttpTransport('wicked.community');
+    assert.equal(community, null,
+      'subsite key MUST NOT reuse the network-root transport (that was the v1.5.4 routing bug)');
+
+    // Same-host subsite (`.main`) still dedupes against the cached parent — the
+    // dedupe logic should fold them onto the same transport since they post
+    // to the same endpoint URL. Without this, the parent + .main get separate
+    // transports competing for the same WP session.
+    const main = pool._findExistingHttpTransport('wicked.main');
+    assert.ok(main, 'same-host subsite should still dedupe against the parent transport');
+    assert.equal(main.key, 'wicked');
+  });
+
   it('returns null for non-HTTP / non-OAuth sites with no endpoint', async () => {
     const config = {
       defaultSite: 'ssh1',
@@ -400,5 +445,102 @@ describe('ConnectionPool — multi-site v2 acceptance (Issue #26)', () => {
     } finally {
       try { fs.unlinkSync(file); } catch { /* ignore */ }
     }
+  });
+});
+
+/**
+ * OAuth subsite routing — Issue #48 acceptance.
+ *
+ * The OAuth branch of _createTransport must mirror the HTTP branch's use of
+ * resolvedEndpoint when a multisite subsite key (`<site>.<subsite>`) is
+ * dispatched, and must fall back to siteConfig.mcp_resource for single-site
+ * keys. The bug was that OAuth ignored both resolved values and always
+ * built the transport against the network root.
+ *
+ * Both directions are pinned so a future regression in either path fails
+ * loudly.
+ */
+describe('ConnectionPool — OAuth subsite routing (Issue #48)', () => {
+  function makeOAuthMultisitePool() {
+    const store = new MemorySecretStore();
+    return store.set(SECRET_SERVICE, 'wicked/access', 'AT')
+      .then(() => store.set(SECRET_SERVICE, 'wicked/refresh', 'RT'))
+      .then(() => {
+        const tm = new TokenManager({ secretStore: store, allowInsecure: true });
+        const config = {
+          defaultSite: 'wickedevolutions',
+          sites: {
+            wickedevolutions: {
+              url: 'https://wickedevolutions.com',
+              mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+              auth: {
+                method: 'oauth',
+                client_id: 'client-x',
+                access_token_ref: makeRef(SECRET_SERVICE, 'wicked/access'),
+                refresh_token_ref: makeRef(SECRET_SERVICE, 'wicked/refresh'),
+                access_token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+                refresh_token_expires_at: new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
+              },
+              auth_status: 'active',
+              multisite: {
+                main: 'https://wickedevolutions.com',
+                community: 'https://community.wickedevolutions.com',
+                test1: 'https://test1.wickedevolutions.com',
+                knowledge: 'https://knowledge.wickedevolutions.com',
+              },
+            },
+          },
+        };
+        const pool = new ConnectionPool(config, () => {}, {
+          secretStore: store,
+          tokenManager: tm,
+          discover: fakeDiscover(),
+          allowInsecure: true,
+        });
+        return pool;
+      });
+  }
+
+  it('subsite key routes to subsite-host endpoint, not network root', async () => {
+    const pool = await makeOAuthMultisitePool();
+    const transport = await pool._createTransport('wickedevolutions.community', null);
+    assert.ok(transport instanceof OAuthHttpTransport);
+    assert.equal(
+      transport.endpoint,
+      'https://community.wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+      'OAuth subsite must POST to the subsite host so multisite routes by URL — ' +
+      'this was the GPT 5.5 review finding (all subsites returned 106 main-site posts)'
+    );
+    assert.equal(transport.subsiteUrl, 'https://community.wickedevolutions.com',
+      'subsite URL should be forwarded to the transport for the X-Abilities-MCP-Subsite-URL header (Phase B)');
+  });
+
+  it('every subsite produces a distinct endpoint host', async () => {
+    const pool = await makeOAuthMultisitePool();
+    const subs = ['main', 'community', 'test1', 'knowledge'];
+    const endpoints = [];
+    for (const s of subs) {
+      const t = await pool._createTransport(`wickedevolutions.${s}`, null);
+      endpoints.push(t.endpoint);
+    }
+    const uniq = new Set(endpoints);
+    assert.equal(uniq.size, subs.length,
+      `expected 4 distinct subsite endpoints, got: ${[...uniq].join(' | ')}`);
+  });
+
+  it('single-site OAuth (no subsite suffix) still uses siteConfig.mcp_resource', async () => {
+    // Pin the no-subsite direction so a future refactor of resolveSiteKey
+    // doesn't accidentally null out the network-root fallback. This is the
+    // helenawillow / wickedevolutions-no-suffix case.
+    const pool = await makeOAuthMultisitePool();
+    const transport = await pool._createTransport('wickedevolutions', null);
+    assert.ok(transport instanceof OAuthHttpTransport);
+    assert.equal(
+      transport.endpoint,
+      'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+      'no subsite suffix → siteConfig.mcp_resource (network root) is correct'
+    );
+    assert.equal(transport.subsiteUrl, null,
+      'no subsite suffix → no subsite URL header forwarded');
   });
 });

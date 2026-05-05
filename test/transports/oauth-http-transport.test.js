@@ -283,3 +283,47 @@ describe('OAuthHttpTransport — surface compatibility with HttpTransport', () =
     assert.equal(t.isReady(), false);
   });
 });
+
+describe('OAuthHttpTransport — multisite subsite header (Issue #48)', () => {
+  it('forwards X-Abilities-MCP-Subsite-URL on every POST when subsiteUrl is set', async () => {
+    const { server, resource, tm, siteAuth } = await buildStack({ accessToken: 'AT-OK' });
+    try {
+      const t = new OAuthHttpTransport({
+        endpoint: resource.endpoint,
+        subsiteUrl: 'https://community.example.com',
+        tokenManager: tm, siteAuth, logger: () => {},
+      });
+      await t.connect();
+      const req = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+      await send(t, req);
+      const seen = resource.history[0];
+      assert.equal(
+        seen.headers['x-abilities-mcp-subsite-url'],
+        'https://community.example.com',
+        'subsite URL header is forward-looking infrastructure for path-style ' +
+        'multisite (Phase B); subdomain-style routing already works via the endpoint URL'
+      );
+      await t.shutdown();
+    } finally {
+      await server.stop(); await resource.stop();
+    }
+  });
+
+  it('omits the subsite header when subsiteUrl is not set (single-site OAuth)', async () => {
+    const { server, resource, tm, siteAuth } = await buildStack({ accessToken: 'AT-OK' });
+    try {
+      const t = new OAuthHttpTransport({
+        endpoint: resource.endpoint, tokenManager: tm, siteAuth, logger: () => {},
+      });
+      await t.connect();
+      const req = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+      await send(t, req);
+      const seen = resource.history[0];
+      assert.equal(seen.headers['x-abilities-mcp-subsite-url'], undefined,
+        'no subsite URL → no subsite header (single-site OAuth path unchanged)');
+      await t.shutdown();
+    } finally {
+      await server.stop(); await resource.stop();
+    }
+  });
+});
