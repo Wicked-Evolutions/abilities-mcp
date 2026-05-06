@@ -173,6 +173,32 @@ describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
     );
   });
 
+  it('maps a stuck security CLI prompt to SecretStoreError code=security_cli_timeout', async () => {
+    function timedOutExec(file, args, opts, cb) {
+      assert.equal(file, 'security');
+      assert.equal(args[0], 'find-generic-password');
+      assert.equal(opts.timeout, 5);
+      cb(Object.assign(new Error('operation timed out'), {
+        code: 'ETIMEDOUT',
+        killed: true,
+        signal: 'SIGTERM',
+        stderr: '',
+        stdout: '',
+      }));
+    }
+    const store = new KeychainSecretStore({
+      requireKeytar: REJECT_KEYTAR,
+      platform: 'darwin',
+      exec: timedOutExec,
+      securityTimeoutMs: 5,
+    });
+    await assert.rejects(
+      store.get('abilities-mcp', 'siteA/access'),
+      (err) => err && err.code === 'security_cli_timeout'
+        && /timed out after 5ms/.test(err.message)
+    );
+  });
+
   it('findAll returns [] in fallback mode (security CLI has no enumerate-by-service)', async () => {
     const harness = fakeSecurityExec({
       'abilities-mcp|siteA/access': 'AT',

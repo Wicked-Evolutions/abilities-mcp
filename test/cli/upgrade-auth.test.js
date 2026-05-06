@@ -55,6 +55,35 @@ describe('CLI upgrade-auth (Appendix F.5)', () => {
     assert.equal(legacy, 'OLD-APP-PASSWORD');
   });
 
+  it('keeps the original fallback ref when the legacy keychain copy fails', async () => {
+    const originalGet = h.ctx.secretStore.get.bind(h.ctx.secretStore);
+    h.ctx.secretStore.get = async (service, account) => {
+      if (service === 'abilities-mcp' && account === 'siteX/apppassword') {
+        const err = new Error('security find-generic-password timed out');
+        err.code = 'security_cli_timeout';
+        throw err;
+      }
+      return originalGet(service, account);
+    };
+
+    const fakeRequest = async () => ({ statusCode: 200, headers: {}, body: '{}', json: {} });
+    const r = await h.runCli('upgrade-auth', ['siteX'], { request: fakeRequest });
+    assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+    assert.match(
+      r.lines.join('\n'),
+      /Could not copy App Password fallback to a legacy keychain entry; keeping existing fallback reference/
+    );
+
+    const cfg = h.readConfig();
+    assert.equal(cfg.sites.siteX.auth.method, 'oauth');
+    assert.equal(
+      cfg.sites.siteX.auth.apppassword_fallback.password_ref,
+      'keychain://abilities-mcp/siteX/apppassword'
+    );
+    const legacy = await originalGet('abilities-mcp', 'siteX/apppassword-legacy');
+    assert.equal(legacy, null);
+  });
+
   it('--confirm strips the fallback and deletes legacy keychain entry', async () => {
     // Run Step 2+3 first to set up the fallback state.
     const fakeRequest = async () => ({ statusCode: 200, headers: {}, body: '{}', json: {} });
