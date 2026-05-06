@@ -84,6 +84,14 @@ Single-click install for Claude Desktop on macOS and Windows. The Application Pa
 
 The bundle covers the single-site case. For multi-site (one bridge connected to several WordPress sites at once), use Path 3.
 
+**macOS + Claude Desktop keychain note.** Claude Desktop's `.mcpb` runtime may use Apple's `/usr/bin/security` keychain path when macOS rejects native keytar loading. If you set up OAuth from Terminal and then Claude Desktop repeatedly asks for Keychain access, rerun the terminal setup with the same backend Claude Desktop uses:
+
+```bash
+ABILITIES_MCP_KEYCHAIN_BACKEND=security-cli abilities-mcp add-site --force https://example.com
+```
+
+This is macOS-only and opt-in. It does not loosen Keychain permissions; it just writes tokens through the same Keychain doorway Claude Desktop reads through.
+
 ---
 
 ### Path 2 — Env vars (Claude Code, Cursor, Docker, any MCP client)

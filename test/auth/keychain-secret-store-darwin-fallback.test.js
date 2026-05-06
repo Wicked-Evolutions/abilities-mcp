@@ -123,6 +123,47 @@ describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
     assert.equal(await store.get('abilities-mcp', 'siteA/access'), null);
   });
 
+  it('can force security-CLI on darwin even when keytar is available (Issue #58 backend alignment)', async () => {
+    const harness = fakeSecurityExec();
+    const store = new KeychainSecretStore({
+      keytar: {
+        async getPassword() { throw new Error('keytar must not be used'); },
+        async setPassword() { throw new Error('keytar must not be used'); },
+        async deletePassword() { throw new Error('keytar must not be used'); },
+        async findCredentials() { throw new Error('keytar must not be used'); },
+      },
+      backend: 'security-cli',
+      platform: 'darwin',
+      exec: harness.exec,
+    });
+
+    await store.set('abilities-mcp', 'siteA/access', 'AT-FORCED');
+    assert.equal(await store.get('abilities-mcp', 'siteA/access'), 'AT-FORCED');
+    assert.ok(
+      harness.calls.some((c) => c.args[0] === 'add-generic-password'),
+      'forced backend must write through security CLI'
+    );
+    assert.ok(
+      harness.calls.some((c) => c.args[0] === 'find-generic-password'),
+      'forced backend must read through security CLI'
+    );
+  });
+
+  it('reads ABILITIES_MCP_KEYCHAIN_BACKEND=security-cli from env on darwin', async () => {
+    const harness = fakeSecurityExec();
+    const store = new KeychainSecretStore({
+      requireKeytar: () => {
+        throw new Error('keytar must not be loaded when security-cli is forced');
+      },
+      env: { ABILITIES_MCP_KEYCHAIN_BACKEND: 'security-cli' },
+      platform: 'darwin',
+      exec: harness.exec,
+    });
+
+    await store.set('abilities-mcp', 'siteB/access', 'AT-ENV');
+    assert.equal(await store.get('abilities-mcp', 'siteB/access'), 'AT-ENV');
+  });
+
   it('get returns null when the security CLI reports "could not be found"', async () => {
     const harness = fakeSecurityExec();
     const store = new KeychainSecretStore({
@@ -254,6 +295,34 @@ describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
     assert.deepEqual(found, [{ account: 'sentinel', password: 'x' }]);
     assert.equal(execCalls, 0, 'security CLI must not be called when keytar loads normally');
   });
+
+  it('backend=keytar disables the darwin security-CLI fallback', async () => {
+    const store = new KeychainSecretStore({
+      requireKeytar: REJECT_KEYTAR,
+      backend: 'keytar',
+      platform: 'darwin',
+      exec: () => { throw new Error('security CLI must not be called'); },
+    });
+    assert.equal(await store.isAvailable(), false);
+    await assert.rejects(
+      store.get('abilities-mcp', 'siteA/access'),
+      (err) => err && err.code === 'keytar_unavailable'
+    );
+  });
+
+  it('rejects unsupported keychain backend values with a typed error', async () => {
+    const store = new KeychainSecretStore({
+      backend: 'bogus',
+      platform: 'darwin',
+      exec: () => { throw new Error('exec must not be called'); },
+    });
+    assert.equal(await store.isAvailable(), false);
+    await assert.rejects(
+      store.get('abilities-mcp', 'siteA/access'),
+      (err) => err && err.code === 'invalid_keychain_backend'
+        && /Unsupported ABILITIES_MCP_KEYCHAIN_BACKEND/.test(err.message)
+    );
+  });
 });
 
 describe('KeychainSecretStore — non-darwin keytar failure still throws (#39)', () => {
@@ -279,4 +348,18 @@ describe('KeychainSecretStore — non-darwin keytar failure still throws (#39)',
       );
     });
   }
+
+  it('backend=security-cli is rejected outside macOS', async () => {
+    const store = new KeychainSecretStore({
+      backend: 'security-cli',
+      platform: 'linux',
+      exec: () => { throw new Error('security CLI must not be called'); },
+    });
+    assert.equal(await store.isAvailable(), false);
+    await assert.rejects(
+      store.get('abilities-mcp', 'siteA/access'),
+      (err) => err && err.code === 'security_cli_unavailable'
+        && /only supported on macOS/.test(err.message)
+    );
+  });
 });
