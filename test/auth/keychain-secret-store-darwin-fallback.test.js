@@ -54,10 +54,14 @@ function fakeSecurityExec(seed = {}) {
   function exec(file, args, opts, cb) {
     calls.push({ file, args: args.slice(), opts });
 
-    if (file !== 'security') {
-      return cb(Object.assign(new Error('unexpected exec'), {
+    // Issue #66: production code must call execFile with the absolute
+    // /usr/bin/security path (no PATH resolution). Reject bare 'security'
+    // here so a regression to bare-name resolves to "unexpected exec" and
+    // every dispatch test fails loudly instead of silently passing.
+    if (file !== '/usr/bin/security') {
+      return cb(Object.assign(new Error(`unexpected exec file: ${file}`), {
         code: 1,
-        stderr: 'unexpected exec',
+        stderr: `unexpected exec file: ${file}`,
       }));
     }
 
@@ -231,7 +235,7 @@ describe('KeychainSecretStore — darwin security-CLI dispatch (#39 + #61)', () 
 
   it('maps a stuck security CLI prompt to SecretStoreError code=security_cli_timeout', async () => {
     function timedOutExec(file, args, opts, cb) {
-      assert.equal(file, 'security');
+      assert.equal(file, '/usr/bin/security');
       assert.equal(args[0], 'find-generic-password');
       assert.equal(opts.timeout, 5);
       cb(Object.assign(new Error('operation timed out'), {
