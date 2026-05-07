@@ -3,29 +3,44 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { KeychainSecretStore } = require('../../lib/auth/keychain-secret-store');
+const { KeychainSecretStore: _KeychainSecretStore } = require('../../lib/auth/keychain-secret-store');
+
+// All constructor calls in this file simulate a darwin host. Default the
+// `/usr/bin/security` existence probe (#61) to true so the security-CLI
+// dispatch tests run on linux / win32 CI hosts where the real path doesn't
+// exist. Tests that exercise the probe failure path live in
+// `keychain-secret-store-darwin-default.test.js` and inject explicitly.
+function KeychainSecretStore(opts = {}) {
+  return new _KeychainSecretStore({ fsExistsSync: () => true, ...opts });
+}
 
 /**
- * Issue #39 — darwin security-CLI fallback.
+ * Issues #39 + #61 — darwin security-CLI behavior.
  *
- * macOS's hardened-runtime rejects bundled keytar.node inside Claude Desktop
- * with a Team ID mismatch. The store detects this at `_load()` time and falls
- * back to the macOS `security` CLI via `child_process.execFile`. Tests cover:
+ * #39 introduced a darwin-only security-CLI shell-out for the case where
+ * macOS's hardened-runtime rejected bundled keytar.node inside Claude Desktop.
+ * #61 promoted that path to the default on darwin (alpha-gate fix for the
+ * multi-client ACL identity split). On darwin under the default `auto`
+ * backend, the store engages `/usr/bin/security` directly without attempting
+ * keytar at all.
+ *
+ * The new-default-on-darwin pin lives in
+ * `keychain-secret-store-darwin-default.test.js`; this file covers the
+ * shared security-CLI dispatch behavior plus the explicit-backend opt-outs.
  *
  *  - Keytar-success path is preserved on every platform (existing tests in
- *    `secret-store.test.js` cover the basic round-trip; this file adds
- *    fallback-specific coverage).
- *  - On darwin, when `require('keytar')` throws (simulated via the
- *    `requireKeytar` injection seam), the store enters fallback mode and
+ *    `secret-store.test.js` cover the basic round-trip; this file covers
+ *    security-CLI-specific dispatch).
+ *  - On darwin under default `auto`, the store engages security-CLI mode and
  *    dispatches get/set/delete to a mocked `execFile`.
  *  - The "could not be found" stderr from `security` maps to keytar's
  *    null (get) / false (delete) return semantics.
  *  - Other stderr propagates as `SecretStoreError` with code
  *    `security_cli_failed`.
- *  - `isAvailable()` returns true in both keytar and fallback modes.
+ *  - `isAvailable()` returns true in both keytar and security-CLI modes.
  *  - On linux/win32, a keytar load failure still throws `keytar_unavailable`
- *    (no fallback engaged — the security CLI is darwin-only).
- *  - `findAll` returns [] in fallback mode.
+ *    (no security-CLI engagement — it's darwin-only).
+ *  - `findAll` returns [] in security-CLI mode.
  */
 
 /**
@@ -98,8 +113,8 @@ const REJECT_KEYTAR = () => {
   throw new Error("dlopen(keytar.node, 0x0001): code signature in mapping process and mapped file (non-platform) have different Team IDs");
 };
 
-describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
-  it('falls back to security-CLI on darwin when keytar require fails', async () => {
+describe('KeychainSecretStore — darwin security-CLI dispatch (#39 + #61)', () => {
+  it('engages security-CLI mode on darwin under default auto backend', async () => {
     const harness = fakeSecurityExec();
     const store = new KeychainSecretStore({
       requireKeytar: REJECT_KEYTAR,
@@ -109,7 +124,7 @@ describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
     assert.equal(await store.isAvailable(), true);
   });
 
-  it('round-trips set/get/delete via security CLI in fallback mode', async () => {
+  it('round-trips set/get/delete via security CLI on darwin', async () => {
     const harness = fakeSecurityExec();
     const store = new KeychainSecretStore({
       requireKeytar: REJECT_KEYTAR,
@@ -240,7 +255,7 @@ describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
     );
   });
 
-  it('findAll returns [] in fallback mode (security CLI has no enumerate-by-service)', async () => {
+  it('findAll returns [] in security-CLI mode (security CLI has no enumerate-by-service)', async () => {
     const harness = fakeSecurityExec({
       'abilities-mcp|siteA/access': 'AT',
       'abilities-mcp|siteA/refresh': 'RT',
@@ -272,7 +287,7 @@ describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
     assert.equal(setCall.args[wIdx + 1], trickyPassword);
   });
 
-  it('on darwin, when keytar IS available, fallback is NOT engaged', async () => {
+  it('on darwin with explicit backend=keytar, security-CLI is NOT engaged (#61 opt-out)', async () => {
     function fakeKeytar() {
       const map = new Map();
       return {
@@ -286,6 +301,7 @@ describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
     const trapExec = () => { execCalls += 1; };
     const store = new KeychainSecretStore({
       keytar: fakeKeytar(),
+      backend: 'keytar',
       platform: 'darwin',
       exec: trapExec,
     });
@@ -293,7 +309,7 @@ describe('KeychainSecretStore — darwin security-CLI fallback (#39)', () => {
     assert.equal(await store.get('abilities-mcp', 'siteA/access'), 'AT');
     const found = await store.findAll('abilities-mcp');
     assert.deepEqual(found, [{ account: 'sentinel', password: 'x' }]);
-    assert.equal(execCalls, 0, 'security CLI must not be called when keytar loads normally');
+    assert.equal(execCalls, 0, 'security CLI must not be called when keytar is explicitly opted into');
   });
 
   it('backend=keytar disables the darwin security-CLI fallback', async () => {

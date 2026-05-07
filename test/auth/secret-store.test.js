@@ -84,7 +84,9 @@ describe('KeychainSecretStore (with stub)', () => {
   }
 
   it('round-trips through an injected keytar-shaped object', async () => {
-    const store = new KeychainSecretStore({ keytar: stubKeytar() });
+    // backend: 'keytar' opts out of the #61 darwin-default security-CLI path
+    // so the injected keytar is actually exercised on every CI platform.
+    const store = new KeychainSecretStore({ keytar: stubKeytar(), backend: 'keytar' });
     await store.set('abilities-mcp', 'siteA/access', 'AT');
     assert.equal(await store.get('abilities-mcp', 'siteA/access'), 'AT');
     await store.delete('abilities-mcp', 'siteA/access');
@@ -92,7 +94,7 @@ describe('KeychainSecretStore (with stub)', () => {
   });
 
   it('isAvailable() is true with injected keytar', async () => {
-    const store = new KeychainSecretStore({ keytar: stubKeytar() });
+    const store = new KeychainSecretStore({ keytar: stubKeytar(), backend: 'keytar' });
     assert.equal(await store.isAvailable(), true);
   });
 });
