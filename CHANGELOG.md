@@ -2,7 +2,7 @@
 
 All notable changes to Abilities MCP are documented here.
 
-## [Unreleased]
+## [1.6.0] - 2026-05-07
 
 ### Fixed
 
