@@ -408,7 +408,12 @@ describe('CLI add-site', () => {
     // site.multisite[slug] as a URL string) and lib/connection-pool.js
     // (treats it identically). buildMultisiteBlock must produce that shape.
 
-    it('maps subdomain-mode subsites to first-label slugs', () => {
+    it('maps subdomain-mode subsites to first-label slugs (no synthetic main)', () => {
+      // Issue #70: the network-root item (blog_id 1, parent host) used to
+      // produce a `main` slug. That synthetic alias is gone — the network
+      // root is reachable as the parent site_id itself when add-site runs
+      // against the root, so the dot-notation block contains only the
+      // siblings.
       const items = [
         { blog_id: 1, domain: 'wickedevolutions.com', path: '/', url: 'https://wickedevolutions.com' },
         { blog_id: 2, domain: 'community.wickedevolutions.com', path: '/', url: 'https://community.wickedevolutions.com' },
@@ -417,14 +422,17 @@ describe('CLI add-site', () => {
       ];
       const block = buildMultisiteBlock('https://wickedevolutions.com', items);
       assert.deepEqual(block, {
-        main: 'https://wickedevolutions.com',
         community: 'https://community.wickedevolutions.com',
         knowledge: 'https://knowledge.wickedevolutions.com',
         test1: 'https://test1.wickedevolutions.com',
       });
+      assert.ok(!('main' in block), 'no synthetic `main` slug (#70)');
     });
 
-    it('maps path-mode subsites to first-segment slugs', () => {
+    it('maps path-mode subsites to first-segment slugs (no synthetic main)', () => {
+      // Issue #70: in path-style multisite the network-root item also
+      // used to synthesize `main`. Now it is skipped; the network root is
+      // the parent site itself (reachable as `<site>` without dot).
       const items = [
         { blog_id: 1, domain: 'example.com', path: '/', url: 'https://example.com' },
         { blog_id: 2, domain: 'example.com', path: '/blog2/', url: 'https://example.com/blog2' },
@@ -432,25 +440,26 @@ describe('CLI add-site', () => {
       ];
       const block = buildMultisiteBlock('https://example.com', items);
       assert.deepEqual(block, {
-        main: 'https://example.com',
         blog2: 'https://example.com/blog2',
         store: 'https://example.com/store',
       });
+      assert.ok(!('main' in block), 'no synthetic `main` slug (#70)');
     });
 
     it('disambiguates colliding slugs by blog_id', () => {
       // Pathological case: subdomain + path mode mixed where two sites
       // would resolve to the same first-label slug. Block must preserve
-      // both entries by appending blog_id.
+      // both entries by appending blog_id. The network-root item
+      // (blog_id 1) is skipped per #70.
       const items = [
         { blog_id: 1, domain: 'example.com', path: '/', url: 'https://example.com' },
         { blog_id: 2, domain: 'shop.example.com', path: '/', url: 'https://shop.example.com' },
         { blog_id: 3, domain: 'shop.example.com', path: '/', url: 'https://shop.example.com/alt' },
       ];
       const block = buildMultisiteBlock('https://example.com', items);
-      assert.equal(block.main, 'https://example.com');
       assert.equal(block.shop, 'https://shop.example.com');
       assert.equal(block['shop-3'], 'https://shop.example.com/alt');
+      assert.ok(!('main' in block), 'no synthetic `main` slug (#70)');
     });
 
     it('strips www. from parent host before deriving slugs', () => {
@@ -459,25 +468,56 @@ describe('CLI add-site', () => {
         { blog_id: 2, domain: 'community.example.com', path: '/', url: 'https://community.example.com' },
       ];
       const block = buildMultisiteBlock('https://www.example.com', items);
-      assert.equal(block.main, 'https://example.com');
       assert.equal(block.community, 'https://community.example.com');
+      assert.ok(!('main' in block), 'no synthetic `main` slug (#70)');
     });
 
     it('skips items missing a URL', () => {
       const items = [
-        { blog_id: 1, domain: 'example.com', path: '/', url: 'https://example.com' },
-        { blog_id: 2, domain: 'community.example.com', path: '/' },
+        { blog_id: 2, domain: 'community.example.com', path: '/', url: 'https://community.example.com' },
+        { blog_id: 3, domain: 'shop.example.com', path: '/' },
       ];
       const block = buildMultisiteBlock('https://example.com', items);
-      assert.equal(Object.keys(block).length, 1);
-      assert.equal(block.main, 'https://example.com');
+      assert.deepEqual(block, { community: 'https://community.example.com' });
     });
 
-    it('deriveSubsiteSlug returns "main" for the network root', () => {
+    it('subdomain-style multisite with subsite parent: no `main` key in block (#70 cold-AI scenario)', () => {
+      // Phase C.3 cold-AI scenario: operator runs add-site against a
+      // subdomain-style subsite (community.wickedevolutions.com), not
+      // against the network root. The bridge probes multisite/list-sites
+      // and builds the dot-notation block. Pre-fix, the parent-host item
+      // (the subsite itself, with path '/') synthesized a `main` slug
+      // whose URL was the SOURCE SUBSITE — agents calling
+      // `<site>.main` silently acted on community.* instead of the
+      // network root. Post-fix the synthetic alias is gone; the network
+      // root is reachable as `<site>.<root-domain-label>`
+      // (`<site>.wickedevolutions`) via the fall-through branch.
+      const items = [
+        { blog_id: 1, domain: 'wickedevolutions.com', path: '/', url: 'https://wickedevolutions.com' },
+        { blog_id: 2, domain: 'community.wickedevolutions.com', path: '/', url: 'https://community.wickedevolutions.com' },
+        { blog_id: 3, domain: 'knowledge.wickedevolutions.com', path: '/', url: 'https://knowledge.wickedevolutions.com' },
+        { blog_id: 4, domain: 'test1.wickedevolutions.com', path: '/', url: 'https://test1.wickedevolutions.com' },
+      ];
+      const block = buildMultisiteBlock('https://community.wickedevolutions.com', items);
+
+      assert.ok(!('main' in block),
+        '`main` slug must not appear when add-site parent is a subdomain subsite (#70)');
+      assert.equal(block.wickedevolutions, 'https://wickedevolutions.com',
+        'network root reachable via its domain-label slug (fall-through branch)');
+      assert.equal(block.knowledge, 'https://knowledge.wickedevolutions.com');
+      assert.equal(block.test1, 'https://test1.wickedevolutions.com');
+      // The source subsite (community.wickedevolutions.com — itemDomain
+      // === parentHost && itemPath === '') is skipped: it is the parent
+      // site_id itself, addressable without a dot.
+      assert.ok(!('community' in block),
+        'source subsite is the parent site_id itself, not a dot-notation entry');
+    });
+
+    it('deriveSubsiteSlug returns null when item is the parent root (#70 — was "main")', () => {
       assert.equal(
         deriveSubsiteSlug('example.com',
           { domain: 'example.com', path: '/' }),
-        'main');
+        null);
     });
 
     it('deriveSubsiteSlug returns first label for subdomain subsites', () => {
