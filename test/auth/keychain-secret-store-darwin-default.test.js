@@ -104,10 +104,43 @@ describe('KeychainSecretStore — darwin auto default = security-CLI (#61)', () 
     await store.delete('abilities-mcp', 'siteA/access');
 
     assert.equal(calls.length, 3, 'set/get/delete must each invoke security CLI');
-    assert.equal(calls[0].file, 'security');
     assert.equal(calls[0].args[0], 'add-generic-password');
     assert.equal(calls[1].args[0], 'find-generic-password');
     assert.equal(calls[2].args[0], 'delete-generic-password');
+  });
+
+  it('passes the absolute /usr/bin/security path to execFile (no PATH resolution) — #66 regression pin', async () => {
+    // Issue #66: the load-time probe pins SECURITY_CLI_PATH but a prior
+    // version of _execSecurity passed bare 'security' to execFile, which
+    // would resolve through PATH and could route the syscall through a
+    // shadowing binary (brew, nvm, ~/bin). Pin the absolute path explicitly
+    // so a future revert to bare-name fails this test loudly.
+    const calls = [];
+    function captureExec(file, args, opts, cb) {
+      calls.push({ file });
+      const sub = args[0];
+      const wIdx = args.indexOf('-w');
+      if (sub === 'add-generic-password') return cb(null, '', '');
+      if (sub === 'find-generic-password') return cb(null, `${args[wIdx + 1] || 'pw'}\n`, '');
+      if (sub === 'delete-generic-password') return cb(null, '', '');
+      return cb(Object.assign(new Error('unknown'), { stderr: 'unknown' }));
+    }
+
+    const store = new KeychainSecretStore({
+      platform: 'darwin',
+      fsExistsSync: PROBE_TRUE,
+      exec: captureExec,
+    });
+
+    await store.set('abilities-mcp', 'siteA/access', 'AT');
+    await store.get('abilities-mcp', 'siteA/access');
+    await store.delete('abilities-mcp', 'siteA/access');
+
+    assert.equal(calls.length, 3);
+    for (const call of calls) {
+      assert.equal(call.file, '/usr/bin/security',
+        'execFile must be called with the absolute /usr/bin/security path to bypass PATH resolution (#66)');
+    }
   });
 });
 
