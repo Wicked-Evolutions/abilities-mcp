@@ -30,6 +30,14 @@ function noopExec(file, args, opts, cb) {
 }
 
 describe('KeychainSecretStore — darwin auto default = security-CLI (#61)', () => {
+  // Tests in this describe simulate `platform: 'darwin'` while running on
+  // Ubuntu CI. The new #61 probe synchronously checks `/usr/bin/security`
+  // existence, which is absent on linux CI runners; injecting
+  // `fsExistsSync: () => true` makes the probe succeed so the rest of the
+  // dispatch behavior is what's actually being asserted. The probe-failure
+  // path is exercised explicitly in the second describe block below.
+  const PROBE_TRUE = () => true;
+
   it('does NOT invoke requireKeytar on darwin under default auto backend', async () => {
     let requireCalls = 0;
     const requireKeytar = () => {
@@ -40,6 +48,7 @@ describe('KeychainSecretStore — darwin auto default = security-CLI (#61)', () 
     const store = new KeychainSecretStore({
       requireKeytar,
       platform: 'darwin',
+      fsExistsSync: PROBE_TRUE,
       // exec stub never reached because we only call isAvailable().
       exec: noopExec,
     });
@@ -63,6 +72,7 @@ describe('KeychainSecretStore — darwin auto default = security-CLI (#61)', () 
     const store = new KeychainSecretStore({
       keytar: fakeKeytar,
       platform: 'darwin',
+      fsExistsSync: PROBE_TRUE,
       exec: noopExec,
     });
 
@@ -75,8 +85,6 @@ describe('KeychainSecretStore — darwin auto default = security-CLI (#61)', () 
     function captureExec(file, args, opts, cb) {
       calls.push({ file, args: args.slice() });
       const sub = args[0];
-      const sIdx = args.indexOf('-s');
-      const aIdx = args.indexOf('-a');
       const wIdx = args.indexOf('-w');
       if (sub === 'add-generic-password') return cb(null, '', '');
       if (sub === 'find-generic-password') return cb(null, `${args[wIdx + 1] || 'pw-stub'}\n`, '');
@@ -86,6 +94,7 @@ describe('KeychainSecretStore — darwin auto default = security-CLI (#61)', () 
 
     const store = new KeychainSecretStore({
       platform: 'darwin',
+      fsExistsSync: PROBE_TRUE,
       exec: captureExec,
       // No requireKeytar override needed — auto darwin never calls it.
     });
