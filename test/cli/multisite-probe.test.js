@@ -29,7 +29,9 @@ const ENDPOINT = 'https://network.example.com/wp-json/mcp/mcp-adapter-default-se
 const ACCESS_TOKEN = 'AT-test';
 
 function makeSubsite(i) {
-  // i = 1 → main (network root). i > 1 → subdomain subsite.
+  // i = 1 → network root. i > 1 → subdomain subsite. Per #70, the network
+  // root item is skipped by buildMultisiteBlock (no synthetic `main`
+  // slug), so block size in these pagination tests is N - 1 not N.
   if (i === 1) {
     return { blog_id: 1, domain: 'network.example.com', path: '/', url: 'https://network.example.com' };
   }
@@ -105,7 +107,8 @@ describe('probeMultisite — pagination (Issue #49)', () => {
       deps: { request },
     });
     assert.equal(r.reason, 'multisite-root');
-    assert.equal(Object.keys(r.block).length, 100);
+    // 100 fixture items - 1 (network root, skipped per #70) = 99 in block.
+    assert.equal(Object.keys(r.block).length, 99);
     // The page param is REQUIRED — pinned via call sequence so a future
     // regression where page defaults to 1 silently fails here, not in
     // the data assertion above.
@@ -130,7 +133,8 @@ describe('probeMultisite — pagination (Issue #49)', () => {
       deps: { request },
     });
     assert.equal(r.reason, 'multisite-root');
-    assert.equal(Object.keys(r.block).length, 101,
+    // 101 fixture items - 1 (network root, skipped per #70) = 100 in block.
+    assert.equal(Object.keys(r.block).length, 100,
       'partial page on page 2 (1 item) must NOT be dropped — termination ordering pins this');
     assert.deepEqual(calls, [
       { page: 1, per_page: 100 },
@@ -147,7 +151,8 @@ describe('probeMultisite — pagination (Issue #49)', () => {
       deps: { request },
     });
     assert.equal(r.reason, 'multisite-root');
-    assert.equal(Object.keys(r.block).length, 250);
+    // 250 fixture items - 1 (network root, skipped per #70) = 249 in block.
+    assert.equal(Object.keys(r.block).length, 249);
     assert.deepEqual(calls, [
       { page: 1, per_page: 100 },
       { page: 2, per_page: 100 },
@@ -167,7 +172,8 @@ describe('probeMultisite — pagination (Issue #49)', () => {
       deps: { request },
     });
     assert.equal(r.reason, 'multisite-root');
-    assert.equal(Object.keys(r.block).length, 100);
+    // 100 fixture items - 1 (network root, skipped per #70) = 99 in block.
+    assert.equal(Object.keys(r.block).length, 99);
     assert.deepEqual(calls, [{ page: 1, per_page: 100 }]);
   });
 
@@ -180,7 +186,8 @@ describe('probeMultisite — pagination (Issue #49)', () => {
       deps: { request },
     });
     assert.equal(r.reason, 'multisite-root');
-    assert.equal(Object.keys(r.block).length, 250);
+    // 250 fixture items - 1 (network root, skipped per #70) = 249 in block.
+    assert.equal(Object.keys(r.block).length, 249);
     assert.deepEqual(calls, [
       { page: 1, per_page: 100 },
       { page: 2, per_page: 100 },
