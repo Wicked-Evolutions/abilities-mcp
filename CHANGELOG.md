@@ -2,6 +2,20 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **macOS keychain backend defaults to security-CLI for cross-runtime ACL identity (Issue [#61](https://github.com/Wicked-Evolutions/abilities-mcp/issues/61), Alpha Release Gate Phase B.2).** v1.5.5's [#58](https://github.com/Wicked-Evolutions/abilities-mcp/issues/58) shipped `ABILITIES_MCP_KEYCHAIN_BACKEND=security-cli` as an opt-in alignment, but the default `auto` backend still picked keytar in terminal / Claude Code contexts and security-CLI only in Claude Desktop's `.mcpb` runtime. Multi-client operator setups (Claude Desktop + Claude Code + Codex on the same workstation — the standard alpha install reality) saw a fresh macOS Keychain ACL prompt on every cross-runtime read, because each runtime's keychain syscall caller binary was a different ACL identity (system `node`, Codex's bundled `node`, `/usr/bin/security`). On darwin under the default `auto` backend, `KeychainSecretStore` now engages `/usr/bin/security` directly without attempting to load keytar. Every bridge spawn — Claude Desktop, Claude Code, Codex, terminal CLI — issues `SecKeychainItem*` calls through the same caller binary, so macOS's per-binary ACL trusted-application list contains exactly one entry. After the operator's first "Always Allow" the entry is silently readable from every runtime. The fix preserves least-privilege ACL semantics: no `-A` all-apps flag, no `-T` consumer-path additions, no broadening of the trusted-application set; the trusted set is *narrower* than today (one binary instead of N). Linux / win32 behavior unchanged (keytar via libsecret / Credential Manager — no analogous identity-split bug on those platforms).
+  - **Security CLI existence probe.** `_load()` now probes `/usr/bin/security` on first use and surfaces a typed `SecretStoreError` (`code: 'security_cli_unavailable'`) if absent, so corporate-locked or non-standard macOS hosts get a clear early diagnostic instead of an opaque execFile spawn failure on the first ability call.
+  - **`findAll()` darwin behavior:** `findAll()` is unavailable on the Darwin security-cli backend; current bridge flows do not rely on it. Linux / Windows (keytar) continue to enumerate normally.
+  - **Operator opt-out:** operators who need keytar on darwin (uncommon — debugging, custom build) can opt back in with `ABILITIES_MCP_KEYCHAIN_BACKEND=keytar`. Behavior matches v1.5.5: keytar is attempted, throws `SecretStoreError` (`code: 'keytar_unavailable'`) if it can't load.
+
+### Known limitations
+
+- **Existing macOS keychain entries written under v1.5.5 keytar may prompt once on first read under the new default (Issue [#61](https://github.com/Wicked-Evolutions/abilities-mcp/issues/61)).** v1.5.5 wrote OAuth and App Password entries via keytar in terminal / Claude Code contexts, so the entry's macOS Keychain ACL trusted-application list contains the system `node` binary, not `/usr/bin/security`. After upgrading, the first read by `/usr/bin/security` against an existing entry triggers a one-time ACL prompt — operators have **two recovery paths** (same shape as the v1.5.5 [#58](https://github.com/Wicked-Evolutions/abilities-mcp/issues/58) opt-in note): (1) click **Always Allow** at the prompt — the ACL is updated to add `/usr/bin/security` and no further prompts appear from any runtime, OR (2) re-run `abilities-mcp add-site --force <site>` / `abilities-mcp reauth <site>` to write a fresh entry under the new default backend. New entries written from this release forward never carry the legacy ACL state. The remaining one-time prompt is UX, not security: existing keychain ACLs continue to protect secrets correctly throughout.
+
+
 ## [1.5.5] - 2026-05-05
 
 ### Fixed
