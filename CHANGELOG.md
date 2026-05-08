@@ -21,6 +21,8 @@ All notable changes to Abilities MCP are documented here.
 
 - **Full OAuth grant does not imply full execution. Abilities for AI module permissions remain an independent per-blog gate.** A granted OAuth scope is necessary but not sufficient to execute an ability. Abilities for AI's module permission settings (per-blog on multisite, configured at *Abilities for AI → Permissions* in wp-admin) gate execution independently — if a module's read/write/delete tier is disabled there, the OAuth-scope-bearing token will receive `[ability_disabled]` 403 errors with explicit operator remediation guidance, regardless of the granted scope set. The two gates apply together by design (Principle 5 — Permissions Stay Layered) to prevent AI sessions from escalating their own permissions via the OAuth surface.
 
+- **Pre-1.6.0 add-site runs may have written stale `main` aliases into multisite blocks of `wp-sites.json` (Issue [#70](https://github.com/Wicked-Evolutions/abilities-mcp/issues/70)).** v1.6.0 includes the fix that no longer generates `main` slugs, but existing `wp-sites.json` files written by earlier versions retain those keys and would silently route `<site>.main` to the source subsite instead of the network root. Operators upgrading from earlier versions: either re-run `add-site` against any affected subsite to regenerate its multisite block fresh under v1.6.0+ logic, or manually edit `~/.abilities-mcp/wp-sites.json` to remove the `"main": ...` entry from each affected `multisite` block. The `<site>.<network-root-domain-label>` slug (e.g., `wicked-community.wickedevolutions`) continues to route to the network root and remains the supported alias.
+
 
 ## [1.5.5] - 2026-05-05
 
