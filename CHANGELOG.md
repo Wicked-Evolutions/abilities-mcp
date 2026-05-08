@@ -2,6 +2,24 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [1.6.1] - 2026-05-08
+
+Documentation update — README rewrite for OAuth-from-`.mcpb` recommended path + post-v1.5.0/v1.6.0 surface coverage. Code unchanged from v1.6.0.
+
+### Documentation
+
+- README rewritten to lead operators into the alpha-recommended OAuth path (Path 1: `.mcpb` install + `npm install -g @wickedevolutions/abilities-mcp` + `upgrade-auth` + `add-site` + `reauth --add-scope=`). OAuth was invisible in the v1.6.0 README despite being available since v1.5.0.
+- New CLI Reference section covering all subcommands: `add-site`, `reauth` (with the `--add-scope=` / `--remove-scope=` / `--scope=` triad), `revoke`, `list-sites`, `test`, `upgrade-auth`, `force-downgrade`, `self-check`. Plus global flags + exit-code table.
+- Multisite `wp-sites.json` example rewritten: dropped the stale `main` slug (which v1.6.0's [#70](https://github.com/Wicked-Evolutions/abilities-mcp/issues/70) explicitly removed from `add-site` generation), replaced with the dot-suffix routing model documentation.
+- macOS keychain note rewritten: `/usr/bin/security` is now the default backend on darwin under the `auto` setting per v1.6.0's [#61](https://github.com/Wicked-Evolutions/abilities-mcp/issues/61). Removed instruction to opt into `ABILITIES_MCP_KEYCHAIN_BACKEND=security-cli` (no longer needed).
+- New Notes section (replaces Known Limitations) covering: four-layer permissions model with the runtime-error-as-teacher pattern, paired ability classes architecture (`content-list-structure` ↔ `content-list`; `content-get-text` ↔ `content-get`), multisite OAuth subsite execution path, and session lock contention as the only remaining concrete product constraint.
+- Welcome section at top with verbatim *"Welcome, Wordpressnaut"* spaceship paragraph + 3 URL pointers (knowledge.wickedevolutions.com, wickedevolutions.com, abilitiesforai.io). Disclaimer block from J at the very top.
+- Pointer to [PRINCIPLES.md](PRINCIPLES.md) as the *Official WordPress Compatibility Contract* binding all four suite repos.
+- Architecture section updated to reflect both OAuth 2.1 + Application Password as transport options (was Application Password only).
+- Existing bottom *Disclaimer* section retired (replaced by J's disclaimer at the top).
+
+Closes [#74](https://github.com/Wicked-Evolutions/abilities-mcp/issues/74).
+
 ## [1.6.0] - 2026-05-07
 
 ### Fixed
