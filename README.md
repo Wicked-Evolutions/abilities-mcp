@@ -1,18 +1,33 @@
 # Abilities MCP
 
-> One MCP to Rule Your WordPress World.
+> **A word from J, the director of this creation.**
+>
+> Everything you see here is built by a single human who does not read or write code and is written by AI. Everything is in constant motion and by observing that movement we create the illusion of being still. Change happens at any given moment. It is simply a law of evolution. Stillness is an act of conscious awareness, not a reality of life.
 
-Open-source MCP bridge that connects any AI client to your WordPress sites through the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/). Single STDIO server, multi-site routing, zero dependencies.
+## Welcome, Wordpressnaut
+
+Here is the spaceship, now you'll have to learn how to fly and please do remember, humans make mistakes, humans created AI so AI makes mistakes. Learning to fly is your job and to do that you'll need structure, systems, checklists, principles and understanding you stand before a magical leap of a steep and wonderful learning curve. Be patient and do backup things.
+
+→ Knowledge layer (deeper traversal): [https://knowledge.wickedevolutions.com](https://knowledge.wickedevolutions.com)
+→ [https://wickedevolutions.com](https://wickedevolutions.com)
+→ [https://abilitiesforai.io](https://abilitiesforai.io)
+
+Our development aim is the *Official WordPress Compatibility Contract* — see [PRINCIPLES.md](PRINCIPLES.md) for the full binding principles across the four-repo suite.
+
+---
+
+Open-source MCP bridge that connects any AI client to your WordPress sites through the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/). Single STDIO server, multi-site routing, OAuth 2.1 or Application Password authentication, zero npm dependencies.
 
 ## Features
 
 - **Multi-site routing** — Single MCP server serves all your WordPress sites
+- **OAuth 2.1** — Dynamic Client Registration, PKCE, browser-loopback consent, keychain-backed tokens, automatic refresh, scope expansion
+- **Application Password** — Application Passwords with MCP session management (the legacy alpha-supported path; OAuth is recommended)
 - **Site parameter injection** — LLM sees a `site` enum on every tool, defaults to your primary site
 - **Lazy connections** — Sites connect on first use, not at startup
-- **HTTP transport** — Application Passwords with MCP session management
-- **WordPress multisite** — Subdomain/subdirectory multisites via dot notation (`site.blog`)
+- **WordPress multisite** — Subdomain-style multisite with cross-site routing through the dot-suffix model
 - **Auto-reconnect** — Exponential backoff, healthcheck pings, session recovery
-- **Zero dependencies** — Node.js built-in modules only
+- **Zero npm dependencies** — Node.js built-in modules only
 
 ## What You Can Do
 
@@ -23,17 +38,17 @@ The abilities available to your AI agent depend on which ability plugins you ins
 **Infrastructure** — filesystem, meta, REST discovery, knowledge layer
 **Third-party integrations** — auto-detected modules for supported plugins (Astra, Spectra, SureCart, Presto Player, and more)
 
-**[Abilities for Fluent Plugins](https://github.com/Wicked-Evolutions/abilities-for-fluent-plugins)** is our continuously-enhanced third-party translator — bringing AI control to FluentCRM, FluentCommunity, FluentForms, FluentBooking, FluentSupport, FluentBoards, FluentSMTP, FluentAuth, FluentSnippets, FluentMessaging, FluentCart, and FluentAffiliate. We build and maintain it because we use Fluent's plugins ourselves and wanted them AI-native.
+**[Abilities for Fluent Plugins](https://github.com/Wicked-Evolutions/abilities-for-fluent-plugins)** is our continuously-enhanced first-party translator — bringing AI control to FluentCRM, FluentCommunity, FluentForms, FluentBooking, FluentSupport, FluentBoards, FluentSMTP, FluentAuth, FluentSnippets, FluentMessaging, FluentCart, and FluentAffiliate. We build and maintain it because we use Fluent's plugins ourselves and wanted them AI-native.
 
 Beyond Fluent, the bridge is plugin-agnostic by design. Any plugin that registers abilities through the WordPress Abilities API becomes available automatically — no configuration in this bridge required. We urge every WordPress plugin developer to prioritize native Abilities API support over anything else.
 
-Every ability enforces `current_user_can()` at execution time — your WordPress role is the security boundary.
+Every ability enforces `current_user_can()` at execution time — your WordPress role is the security boundary, with OAuth scopes and the [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) per-module permission gate as additional layers above it (see [Notes — Four-layer permissions model](#four-layer-permissions-model)).
 
 > **Sign up for the Abilities for AI alpha release:** https://community.wickedevolutions.com/item/abilities-for-ai/
 
 ## Install
 
-There are three install paths. Pick the one that matches how you use AI clients.
+There are three install paths. Pick the one that matches how you use AI clients. **Path 1 (`.mcpb` for Claude Desktop, with the OAuth upgrade) is the recommended operator entry for the alpha.**
 
 ### Set up WordPress (required for all paths)
 
@@ -55,42 +70,75 @@ Go to **Users → Edit (your mcp-agent user) → Application Passwords**, enter 
 | Role | Access | Use case |
 |------|--------|----------|
 | **Administrator** | All modules — content, plugins, themes, settings, users, cache, cron, filesystem, and more | Full site management |
-| **Editor** | Content, Blocks, Taxonomies, Patterns, Meta, Media | Content publishing workflows — safe for teams where AI should write but not configure |
+| **Editor** | Content, Blocks, Taxonomies, Patterns, Meta, Media | Content publishing workflows — safe for teams where AI writes but does not configure |
 
-> **Tip:** Start with Editor. Upgrade to Administrator when you need infrastructure abilities like plugin management, theme switching, or settings changes.
+> **Tip:** Start with Editor. Move to Administrator when you need infrastructure abilities like plugin management, theme switching, or settings changes.
 
 #### Required plugins
 
 Install both on your WordPress site:
 
 1. **[Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/)** — registers WordPress abilities across content, site management, infrastructure, and third-party integration modules
-2. **[Abilities MCP Adapter](https://community.wickedevolutions.com/item/abilities-mcp-adapter/)** — exposes abilities as MCP tools via REST API
+2. **[Abilities MCP Adapter](https://community.wickedevolutions.com/item/abilities-mcp-adapter/)** — exposes abilities as MCP tools via REST API and runs the OAuth 2.1 resource server + authorization server
 
 Both are available as free downloads from our store, or install from GitHub: [abilities-for-ai](https://github.com/Wicked-Evolutions/abilities-for-ai) and [abilities-mcp-adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter).
 
 ---
 
-### Path 1 — `.mcpb` bundle for Claude Desktop (recommended)
+### Path 1 — `.mcpb` bundle for Claude Desktop with OAuth upgrade (recommended)
 
-Single-click install for Claude Desktop on macOS and Windows. The Application Password is stored encrypted in your OS keychain (macOS Keychain / Windows Credential Manager).
+The full alpha-recommended operator path: install the `.mcpb` for single-click Claude Desktop integration, then upgrade in place to OAuth so tokens live in your OS keychain (macOS Keychain / Windows Credential Manager) and refresh automatically.
+
+#### Step 1 — install the `.mcpb` (Application Password baseline)
 
 1. Download `abilities-mcp.mcpb` from the [latest GitHub Release](https://github.com/Wicked-Evolutions/abilities-mcp/releases/latest).
 2. Double-click the file. Claude Desktop opens an "Install Extension" dialog.
 3. Type three things:
    - **WordPress Site URL** — `https://example.com`
    - **WordPress Username** — `mcp-agent`
-   - **Application Password** — paste the password from the previous step
-4. Click **Install**. The connection is live.
+   - **Application Password** — paste the password from the WordPress setup step
+4. Click **Install**. The connection is live with an Application Password.
 
-The bundle covers the single-site case. For multi-site (one bridge connected to several WordPress sites at once), use Path 3.
+The bundle covers the single-site case. To unlock OAuth, multi-site, and the `add-site` / `reauth` / `revoke` / `list-sites` / `test` operator flows, continue to Step 2.
 
-**macOS + Claude Desktop keychain note.** Claude Desktop's `.mcpb` runtime may use Apple's `/usr/bin/security` keychain path when macOS rejects native keytar loading. If you set up OAuth from Terminal and then Claude Desktop repeatedly asks for Keychain access, rerun the terminal setup with the same backend Claude Desktop uses:
+#### Step 2 — install the CLI globally for OAuth and multi-site flows
 
 ```bash
-ABILITIES_MCP_KEYCHAIN_BACKEND=security-cli abilities-mcp add-site --force https://example.com
+npm install -g @wickedevolutions/abilities-mcp
 ```
 
-This is macOS-only and opt-in. It does not loosen Keychain permissions; it just writes tokens through the same Keychain doorway Claude Desktop reads through.
+This puts the `abilities-mcp` command on your PATH so you can run the OAuth subcommands from a terminal.
+
+#### Step 3 — upgrade your Claude Desktop site to OAuth in place
+
+```bash
+abilities-mcp upgrade-auth <site>
+```
+
+This runs the OAuth 2.1 authorization-code flow with PKCE in your default browser, mints fresh tokens, writes them to your OS keychain, and updates `~/.abilities-mcp/wp-sites.json` so the existing Claude Desktop "Abilities MCP" entry now uses OAuth. The Application Password fallback stays in place until you confirm with `--confirm` in a follow-up `upgrade-auth` run.
+
+#### Step 4 — add additional sites (OAuth by default)
+
+```bash
+abilities-mcp add-site https://second-site.com
+abilities-mcp add-site https://third-site.com --label="My Staging Site"
+```
+
+Each added site provisions OAuth via Dynamic Client Registration, runs the consent flow in your browser, and persists tokens to the keychain. New sites surface through the same Claude Desktop "Abilities MCP" entry — no Claude Desktop config edit needed.
+
+For App Password sites instead of OAuth (legacy path), pass `--apppassword --username=<user> --password=<pw>`.
+
+#### Step 5 — expand scopes when broader powers are needed
+
+Default OAuth grants are baseline-scoped — they cover the common read/write categories (`abilities:read`, `abilities:write`, `abilities:multisite:read`, `abilities:multisite:write`). For delete-tier operations, sensitive WordPress core categories (`users`, `settings`, `filesystem`, `plugins`, `cron`, `themes`, `rewrite`), suite scopes (`astra`, `spectra`, `surecart`, `surecart-ecommerce`, `presto-player`), or Fluent suite scopes, extend explicitly:
+
+```bash
+abilities-mcp reauth <site> --add-scope="abilities:users:delete abilities:settings:write"
+```
+
+The `--add-scope=` flag merges the new scopes into the existing set (deduped, order-preserved). Use `--remove-scope=` to drop scopes by exact match, or `--scope=` to replace the entire set (warns if dropping any). The three flags are mutually exclusive.
+
+**macOS keychain note (since v1.6.0).** On macOS, the bridge uses `/usr/bin/security` as its keychain backend by default under the `auto` backend setting. Every bridge spawn — Claude Desktop, Claude Code, Codex, terminal CLI — issues keychain syscalls through the same caller binary, so macOS's per-binary ACL trusted-application list contains exactly one entry. After your first "Always Allow" the entry reads silently from every runtime. If you upgraded from v1.5.x and Claude Desktop repeatedly asks for keychain access, click **Always Allow** once at the prompt OR run `abilities-mcp add-site --force <site>` / `abilities-mcp reauth <site>` to write a fresh entry under the unified backend.
 
 ---
 
@@ -119,7 +167,7 @@ In your client's MCP config:
 }
 ```
 
-The endpoint is auto-derived as `<URL>/wp-json/mcp/mcp-adapter-default-server`. Single-site only — for multi-site, use Path 3.
+The endpoint is auto-derived as `<URL>/wp-json/mcp/mcp-adapter-default-server`. Single-site, Application Password only — for OAuth or multi-site, use Path 1 or Path 3.
 
 For `claude mcp add` users:
 
@@ -135,7 +183,7 @@ claude mcp add wordpress \
 
 ### Path 3 — `wp-sites.json` (multi-site, power users)
 
-Use this when you connect one bridge to multiple WordPress sites, when you want passwords sourced from a keychain or shell command, or when you're targeting WordPress multisite networks via dot-notation routing.
+Use this when you want passwords sourced from a keychain or shell command without going through the OAuth provisioning flow, when you're connecting one bridge to multiple WordPress sites with hand-curated config, or when you're targeting WordPress multisite networks with explicit per-subsite entries.
 
 ```bash
 cp wp-sites.example.json wp-sites.json
@@ -169,6 +217,37 @@ For Claude Desktop, you can also auto-register:
 node abilities-mcp.js --register
 ```
 
+## CLI Reference
+
+Once `@wickedevolutions/abilities-mcp` is installed globally (or you run `node abilities-mcp.js <subcommand>` from a clone), the following subcommands are available:
+
+| Subcommand | What it does | Common flags |
+|------------|--------------|--------------|
+| `add-site <url>` | Register a new site (OAuth by default) | `--apppassword` `--username=` `--password=` `--scope=` `--site-id=` `--label=` `--force` |
+| `reauth <site_id>` | Re-run the OAuth flow for an existing site | `--add-scope=` (recommended) · `--remove-scope=` · `--scope=` (mutually exclusive) |
+| `revoke <site_id>` | Revoke OAuth tokens (local + remote) | — |
+| `list-sites` | Show configured sites + auth status | — |
+| `test <site_id>` | Ping the adapter and report scopes | — |
+| `upgrade-auth <site_id>` | Migrate an existing Application Password site to OAuth in place | `--confirm` (Step 4: drop the App Password fallback after OAuth is verified) |
+| `force-downgrade <site_id>` | Override OAuth pinning (escape hatch for capability-pin failure) | `--i-understand-the-risk` (required) · `--reason="<text>"` |
+| `self-check <site_id>` | Probe Authorization-header survival end-to-end | — |
+
+Bare `abilities-mcp` (no subcommand) starts the MCP STDIO server — the mode every MCP client config invokes.
+
+### Global flags
+
+| Flag | Description |
+|------|-------------|
+| `--config=<path>` | Path to `wp-sites.json` |
+| `--debug` | Include cause stack on errors; debug logging to `/tmp/abilities-mcp.log` |
+| `--allow-insecure` | Allow plain HTTP (localhost dev only) |
+| `--register` | Register in Claude Desktop config |
+| `--name=<name>` | Server name for `--register` (default: `wordpress`) |
+
+### Exit codes
+
+`0` success · `1` unexpected error · `2` usage error · `3` config error · `4` auth failure · `5` capability-pinning violation
+
 ## Configuration
 
 ### `wp-sites.json`
@@ -191,6 +270,8 @@ node abilities-mcp.js --register
 }
 ```
 
+OAuth-managed sites added through `abilities-mcp add-site` are written to `~/.abilities-mcp/wp-sites.json` automatically — they carry an `auth.method: "oauth"` block with keychain references rather than inline secrets.
+
 ### Config search order
 
 1. `--config=/path/to/wp-sites.json` (explicit)
@@ -203,7 +284,9 @@ The first one found wins. If a `wp-sites.json` exists, env vars are ignored.
 
 ### WordPress Multisite
 
-For WordPress multisites, add a `multisite` object mapping subsite keys to their URLs:
+For WordPress multisite networks, OAuth multi-site is provisioned through `abilities-mcp add-site --site-id=<subsite-id> https://<subsite-host>` for each subsite you want to operate on. Each subsite provisions its own OAuth token bound to that subsite's resource. Use the explicit subsite IDs in your MCP client.
+
+For App Password multisite (Path 3 hand-curated config), add a `multisite` object mapping subsite slugs to their URLs:
 
 ```json
 {
@@ -216,15 +299,15 @@ For WordPress multisites, add a `multisite` object mapping subsite keys to their
       "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
     },
     "multisite": {
-      "main": "https://example.com/",
       "blog": "https://blog.example.com/",
-      "shop": "https://shop.example.com/"
+      "shop": "https://shop.example.com/",
+      "example": "https://example.com/"
     }
   }
 }
 ```
 
-Use dot notation to target subsites: `"site": "network.blog"`
+Use the dot-suffix routing pattern to target subsites: `"site": "network.blog"`. The bare bridge name (`"site": "network"`) routes to the bridge's own root; the dot suffix routes cross-site through the same adapter. The recommended cross-site context naming uses the network root's domain label (e.g., `wickedevolutions` for `wickedevolutions.com`) — `abilities-mcp add-site` against a Multisite Network root populates this automatically per the dot-suffix model.
 
 ### Secure password storage
 
@@ -294,7 +377,7 @@ export WP_MCP_PASSWORD="xxxx xxxx xxxx xxxx xxxx xxxx"
 WP_MCP_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx
 ```
 
-The bridge reads `process.env.WP_MCP_PASSWORD` at connection time. If the variable is not set, it throws an error immediately.
+The bridge reads `process.env.WP_MCP_PASSWORD` at connection time. If the variable is not set, it surfaces an error immediately.
 
 #### `password` (not recommended)
 
@@ -338,25 +421,15 @@ When multiple sites are configured, every tool gets an optional `site` parameter
 }
 ```
 
-Omit `site` to use the default site.
-
-## CLI Options
-
-| Flag | Description |
-|------|-------------|
-| `--config=<path>` | Path to wp-sites.json |
-| `--server=<name>` | MCP adapter server name |
-| `--debug` | Enable debug logging to `/tmp/abilities-mcp.log` |
-| `--register` | Register in Claude Desktop config |
-| `--name=<name>` | Server name for `--register` (default: `wordpress`) |
+Omit `site` to use the default site. For multisite networks, the `site` enum surfaces both the bare bridge name and the dot-suffix cross-site contexts (e.g., `network`, `network.blog`, `network.shop`).
 
 ## Architecture
 
 ```mermaid
 graph TD
     Client[AI Client<br/>Claude Code · Gemini CLI · Cursor · any MCP client] -->|STDIO| Bridge[Abilities MCP]
-    Bridge -->|HTTP POST| SiteA[Site A]
-    Bridge -->|HTTP POST| SiteB[Site B]
+    Bridge -->|OAuth 2.1 / HTTP POST| SiteA[Site A]
+    Bridge -->|App Password / HTTP POST| SiteB[Site B]
     Bridge -->|SSH + WP-CLI| SiteC[Site C]
 
     subgraph "Each WordPress Site"
@@ -366,34 +439,55 @@ graph TD
 ```
 
 - One STDIO process handles all sites through a unified connection pool
-- **HTTP transport** — Application Passwords with MCP session management, batch coalescing, auto-reconnect
+- **OAuth 2.1 transport** — Bearer tokens with automatic refresh, keychain-backed persistence, scope expansion via `reauth --add-scope=`
+- **Application Password transport** — HTTP Basic with MCP session management, batch coalescing, auto-reconnect
 - **SSH transport** — WP-CLI over SSH tunnel, healthcheck pings, handshake replay
 - Lazy connections — non-default sites connect on first tool call
 - Tool list comes from the default site with `site` enum injected
 - Permission metadata (`permission`, `enabled`) flows through annotations to the LLM
 - Error responses include `input_schema` for AI self-correction
 
-See [docs/architecture.md](docs/architecture.md) for the full technical deep dive — transport comparison tables, session management, multi-site routing internals, and security model.
+See [docs/architecture.md](docs/architecture.md) for the full technical deep dive — transport comparison tables, session management, multi-site routing internals, OAuth state machine, and security model.
 
-## Known Limitations
+## Notes
 
-- **Session lock contention** ([#4](https://github.com/Wicked-Evolutions/abilities-mcp/issues/4)) — Concurrent bridge instances targeting the same site can cause session loss. Use a single bridge process per site.
+### Four-layer permissions model
+
+When an ability is denied, the rejection comes from one of four independent layers. The runtime error names the layer:
+
+1. **Abilities for AI module permission** — per-blog read/write/delete toggle in *WP Admin → Abilities for AI → Permissions*. The runtime returns `[ability_disabled]` with the module name and where to fix it. (Fix in *Abilities for AI → Permissions*.)
+2. **WordPress capability** — the WordPress user the bridge authenticates as lacks the relevant capability. WordPress core REST returns `rest_forbidden` / `rest_cannot_*` codes. (Fix by granting the cap to the user, or use a higher-privilege user.)
+3. **OAuth scope** — the bridge's OAuth token does not include the scope the ability requires. The adapter returns an `insufficient_scope` rejection. (Fix with `abilities-mcp reauth <site> --add-scope="<scope>"`.)
+4. **Unclear** — generic 500, timeout, or malformed response. Check server logs.
+
+The four gates apply together by design (see [PRINCIPLES.md](PRINCIPLES.md), Principle 5 — *Permissions Stay Layered*). The runtime error tells you which gate fired so you can act at the right layer.
+
+### Paired ability classes
+
+The product ships compact-vs-full pairs across the API by design. Pick the pair member that matches the traversal you intend:
+
+- `content-list-structure` (id/title/slug/status/date/link, ~0.5KB/post) ↔ `content-list` (full block markup, ~50–200KB/post). Use `content-list-structure` for bulk discovery; use `content-list` for targeted full inspection.
+- `content-get-text` (plain text stripped, ~2–20KB) ↔ `content-get` (full block markup, ~50–200KB). Use `content-get-text` when you want the readable content; use `content-get` when you need the block structure.
+
+Each ability description names its payload tradeoff. The pattern recurs across other categories — read the description before reaching for the heavy member when a compact member is available.
+
+### Multisite OAuth subsite execution
+
+For WordPress multisite networks under OAuth, add each subsite you want to operate on as a separate site entry: `abilities-mcp add-site --site-id=<subsite-id> https://<subsite-host>`. Each subsite provisions its own OAuth token bound to that subsite's resource by the adapter's `mcp_resource` check. Use the explicit subsite IDs in your MCP client. Tracked on [#60](https://github.com/Wicked-Evolutions/abilities-mcp/issues/60) for further iteration.
+
+### Session lock contention ([#4](https://github.com/Wicked-Evolutions/abilities-mcp/issues/4))
+
+Concurrent bridge instances targeting the same site can cause session loss. Use a single bridge process per site.
 
 ## Requirements
 
 - Node.js >= 18
 - WordPress 6.9+ with [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter) installed
-- Application Passwords enabled (default in WordPress 5.6+)
+- Application Passwords enabled (default in WordPress 5.6+) for the App Password path; OAuth path needs no additional setup beyond the adapter
 
 ## Evolving Knowledge
 
 We continuously add knowledge docs, skills, and agent patterns to [knowledge.wickedevolutions.com](https://knowledge.wickedevolutions.com).
-
-## Disclaimer
-
-Humans make mistakes — as we know from the present day and history. Humans trained AI. AI acts accordingly. AI predicts probability based on the context window it holds. It is trained to sound certain, as if everything is truth, and to "fix" everything so the human becomes satisfied.
-
-Learn how to communicate with AI. You are fully responsible for using AI in your life, business, and projects. Using these products is your personal responsibility to learn and own.
 
 ## License
 
