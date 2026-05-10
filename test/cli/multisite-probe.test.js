@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   probeMultisite,
+  detectNetworkRoot,
   PROBE_PER_PAGE,
   PROBE_PAGE_CAP,
 } = require('../../lib/cli/multisite-probe');
@@ -96,6 +97,60 @@ function makePaginatedRequest(sites, opts = {}) {
   }
   return { request, calls };
 }
+
+describe('detectNetworkRoot (#77)', () => {
+  it('blog_id:1 marker present — parent matches → isRoot=true', () => {
+    const items = [
+      { blog_id: 1, domain: 'network.example.com', path: '/', url: 'https://network.example.com' },
+      { blog_id: 2, domain: 'sub.network.example.com', path: '/', url: 'https://sub.network.example.com' },
+    ];
+    const r = detectNetworkRoot('https://network.example.com', items);
+    assert.equal(r.isRoot, true);
+    assert.equal(r.networkRootUrl, 'https://network.example.com');
+  });
+
+  it('blog_id:1 marker present — parent is a subsite → isRoot=false, networkRootUrl set', () => {
+    const items = [
+      { blog_id: 1, domain: 'network.example.com', path: '/', url: 'https://network.example.com' },
+      { blog_id: 2, domain: 'sub.network.example.com', path: '/', url: 'https://sub.network.example.com' },
+    ];
+    const r = detectNetworkRoot('https://sub.network.example.com', items);
+    assert.equal(r.isRoot, false);
+    assert.equal(r.networkRootUrl, 'https://network.example.com');
+  });
+
+  it('no blog_id:1 metadata — falls back to URL match (parent matches an item) → isRoot=true', () => {
+    const items = [
+      { domain: 'network.example.com', path: '/', url: 'https://network.example.com' },
+      { domain: 'sub.network.example.com', path: '/', url: 'https://sub.network.example.com' },
+    ];
+    const r = detectNetworkRoot('https://network.example.com', items);
+    assert.equal(r.isRoot, true);
+    assert.equal(r.networkRootUrl, 'https://network.example.com');
+  });
+
+  it('no blog_id:1 metadata — no URL match → isRoot=false, networkRootUrl null', () => {
+    const items = [
+      { domain: 'sub2.network.example.com', path: '/', url: 'https://sub2.network.example.com' },
+      { domain: 'sub3.network.example.com', path: '/', url: 'https://sub3.network.example.com' },
+    ];
+    // Parent points at sub1 which is absent from items — without metadata we
+    // can't identify the root, so we conservatively return isRoot=false with
+    // networkRootUrl=null. Caller emits a "subsite-not-root" with a generic
+    // redirect ("re-run add-site with the network-root URL").
+    const r = detectNetworkRoot('https://sub1.network.example.com', items);
+    assert.equal(r.isRoot, false);
+    assert.equal(r.networkRootUrl, null);
+  });
+
+  it('case-insensitive origin matching', () => {
+    const items = [
+      { blog_id: 1, domain: 'NETWORK.example.com', path: '/', url: 'https://NETWORK.example.com' },
+    ];
+    const r = detectNetworkRoot('https://network.example.com', items);
+    assert.equal(r.isRoot, true);
+  });
+});
 
 describe('probeMultisite — pagination (Issue #49)', () => {
   it('100-site network — page 1 full + page 2 empty terminates loop (no metadata)', async () => {
@@ -193,6 +248,42 @@ describe('probeMultisite — pagination (Issue #49)', () => {
       { page: 2, per_page: 100 },
       { page: 3, per_page: 100 },
     ]);
+  });
+
+  it('subsite-not-root gate (#77) — probe from a subsite URL returns reason: subsite-not-root + networkRootUrl', async () => {
+    // Operator runs `add-site https://sub2.network.example.com` against a
+    // multisite network. The OAuth user is super-admin so multisite/list-sites
+    // returns the full network. Pre-#77 behavior: buildMultisiteBlock fires
+    // and the subsite entry gets a parallel block describing the network from
+    // its own perspective, yielding cross-product enumerations at the MCP
+    // tool surface.
+    const { request } = makePaginatedRequest(makeNetwork(4));
+    const r = await probeMultisite({
+      endpoint: 'https://sub2.network.example.com/wp-json/mcp/mcp-adapter-default-server',
+      accessToken: ACCESS_TOKEN,
+      siteUrl: 'https://sub2.network.example.com',
+      deps: { request },
+    });
+    assert.equal(r.reason, 'subsite-not-root');
+    assert.equal(r.block, null);
+    assert.equal(r.networkRootUrl, 'https://network.example.com',
+      'gate must surface the network-root URL so add-site can redirect the operator');
+  });
+
+  it('subsite-not-root gate (#77) — probe from the network-root URL still proceeds', async () => {
+    // Regression: gate must NOT defang the existing intended behavior. When
+    // the operator's URL IS the network root, the block is built as before.
+    const { request } = makePaginatedRequest(makeNetwork(4));
+    const r = await probeMultisite({
+      endpoint: ENDPOINT,
+      accessToken: ACCESS_TOKEN,
+      siteUrl: SITE_URL,  // https://network.example.com — matches blog_id:1 fixture
+      deps: { request },
+    });
+    assert.equal(r.reason, 'multisite-root');
+    assert.ok(r.block);
+    // 4 fixture items - 1 (network root, skipped per #70) = 3 in block.
+    assert.equal(Object.keys(r.block).length, 3);
   });
 
   it('cap-exceeded — full page at page 50, throws probe_cap_exceeded with diagnostic data', async () => {
