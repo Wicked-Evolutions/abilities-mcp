@@ -212,15 +212,42 @@ if (!isSubcommandInvocation) {
     // Startup — connect to default site
     // -----------------------------------------------------------------------
 
+    // Issue #76: per-site auth-init isolation. `pool.connectDefault` tries the
+    // configured default first and falls back to other configured sites on a
+    // per-site failure (typically RefreshError when refresh tokens expire).
+    // Returns the connected transport, or null when ALL sites failed — in
+    // that case the bridge enters degraded mode (router synthesizes a valid
+    // InitializeResult locally, returns bridge tools only on tools/list, and
+    // surfaces per-call errors on non-bridge tools/call) instead of dying
+    // with the malformed-InitializeResult / EOF symptom that motivated #76.
     try {
       const transport = await pool.connectDefault((parsedMsg, rawLine) => {
         router.handleTransportMessage(parsedMsg, rawLine);
       });
-      router.setDefaultTransport(transport);
-      log(`Default transport connected: ${config.defaultSite}`);
+      if (transport) {
+        router.setDefaultTransport(transport);
+        log(`Default transport connected: ${config.defaultSite}`);
+      } else {
+        const degradedSites = Object.entries(config.sites).map(([siteId, site]) => ({
+          siteId,
+          reason: (site && site._degraded_reason) || 'connect failed',
+        }));
+        process.stderr.write(
+          `abilities-mcp: all configured sites failed to connect at boot — ` +
+          `entering degraded mode. Operators can call wp_bridge_health to see ` +
+          `per-site status; reauth a site to recover.\n`
+        );
+        for (const ds of degradedSites) {
+          process.stderr.write(`  - ${ds.siteId}: ${ds.reason}\n`);
+        }
+        router.enterDegradedMode(degradedSites);
+      }
       router.drainEarlyQueue();
     } catch (err) {
-      process.stderr.write(`abilities-mcp: Failed to connect to default site: ${err.message}\n`);
+      // Reached only on non-per-site errors (bug in connectDefault itself,
+      // or a thrown synchronous error during bootstrap). Per-site failures
+      // are handled inside connectDefault and never surface here.
+      process.stderr.write(`abilities-mcp: bootstrap failed unexpectedly: ${err.message}\n`);
       process.exit(1);
     }
 
