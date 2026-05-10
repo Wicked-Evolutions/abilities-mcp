@@ -544,3 +544,176 @@ describe('ConnectionPool — OAuth subsite routing (Issue #48)', () => {
       'no subsite suffix → no subsite URL header forwarded');
   });
 });
+
+describe('ConnectionPool — connectDefault per-site auth-init isolation (#76)', () => {
+  /**
+   * Failure mode the gate forbids (verbatim from issue #76):
+   *   "MCP server boots and responds with valid InitializeResult even when
+   *    some/all configured sites have expired refresh tokens; degraded sites
+   *    are reported via tools/list, per-call errors, or a dedicated tools/call
+   *    shape — not via init failure."
+   *
+   * Pre-#76: `connectDefault()` connected one site (the configured default);
+   * if that site's transport.connect() threw (RefreshError on expired refresh
+   * token, per `lib/auth/token-manager.js:147-152`), the throw propagated to
+   * the bootstrap catch in `abilities-mcp.js`, which `process.exit(1)`d the
+   * bridge. The MCP client saw EOF and surfaced the malformed-InitializeResult
+   * validator error.
+   *
+   * Post-#76: connectDefault tries the configured default first; on failure
+   * it iterates other configured sites in order, returning the first transport
+   * that successfully connects (and reassigning `config.defaultSite` in-memory).
+   * Returns null only when ALL sites fail — boot does not exit.
+   *
+   * Drives `_createTransport` via a stub that succeeds/fails per site key.
+   */
+  function makeConfig(sites, defaultSite) {
+    return { defaultSite, sites };
+  }
+
+  function fakeOAuthSite() {
+    return {
+      url: 'https://example.com',
+      mcp_resource: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+      auth: {
+        method: 'oauth',
+        client_id: 'c',
+        access_token_ref: 'ref:abilities-mcp:a',
+        refresh_token_ref: 'ref:abilities-mcp:r',
+      },
+      auth_status: 'active',
+    };
+  }
+
+  function makePoolWithStubs(config, perSiteOutcomes) {
+    const pool = new ConnectionPool(config, () => {});
+    pool._createTransport = async (key /* compositeKey */) => {
+      const outcome = perSiteOutcomes[key];
+      if (!outcome) throw new Error(`unconfigured outcome for ${key}`);
+      if (outcome.throwAtCreate) throw outcome.throwAtCreate;
+      const transport = {
+        endpoint: `https://${key}.example.com/wp-json/mcp/mcp-adapter-default-server`,
+        onMessage: null,
+        connect: async () => {
+          if (outcome.throwAtConnect) throw outcome.throwAtConnect;
+        },
+        send: () => {},
+        shutdown: async () => {},
+        isReady: () => true,
+      };
+      return transport;
+    };
+    return pool;
+  }
+
+  it('all sites healthy — no behavioral change for non-degraded operators (regression)', async () => {
+    const config = makeConfig({
+      siteA: fakeOAuthSite(),
+      siteB: fakeOAuthSite(),
+    }, 'siteA');
+    const pool = makePoolWithStubs(config, {
+      siteA: {},
+      siteB: {},
+    });
+    const transport = await pool.connectDefault(() => {});
+    assert.ok(transport, 'transport returned for healthy default site');
+    assert.equal(config.defaultSite, 'siteA',
+      'configured default unchanged when it connects successfully');
+    assert.equal(config.sites.siteA.auth_status, 'active');
+  });
+
+  it('default site fails (RefreshError) → falls back to next configured site, marks default degraded', async () => {
+    // The token-manager throws this exact error shape at lib/auth/token-manager.js:148.
+    const refreshErr = new Error('Refresh token expired for site "siteA". Run: abilities-mcp reauth siteA');
+    refreshErr.code = 'reauth_required';
+    const config = makeConfig({
+      siteA: fakeOAuthSite(),
+      siteB: fakeOAuthSite(),
+    }, 'siteA');
+    const pool = makePoolWithStubs(config, {
+      siteA: { throwAtConnect: refreshErr },
+      siteB: {},
+    });
+
+    const transport = await pool.connectDefault(() => {});
+
+    assert.ok(transport, 'fallback transport returned even when configured default fails');
+    assert.equal(config.defaultSite, 'siteB',
+      'in-memory defaultSite reassigned to fallback');
+    assert.equal(config.sites.siteA.auth_status, 'expired',
+      'configured default marked degraded so wp_bridge_health surfaces it');
+    assert.match(config.sites.siteA._degraded_reason, /Refresh token expired/);
+    assert.equal(config.sites.siteB.auth_status, 'active',
+      'fallback site keeps its existing active status');
+  });
+
+  it('every site fails → returns null (bridge enters degraded mode in bootstrap)', async () => {
+    const refreshErr = new Error('Refresh token expired');
+    const config = makeConfig({
+      siteA: fakeOAuthSite(),
+      siteB: fakeOAuthSite(),
+      siteC: fakeOAuthSite(),
+    }, 'siteA');
+    const pool = makePoolWithStubs(config, {
+      siteA: { throwAtConnect: refreshErr },
+      siteB: { throwAtConnect: refreshErr },
+      siteC: { throwAtConnect: refreshErr },
+    });
+
+    const result = await pool.connectDefault(() => {});
+
+    assert.equal(result, null,
+      'all-sites-failed returns null so bootstrap enters degraded mode instead of exit(1)');
+    assert.equal(config.sites.siteA.auth_status, 'expired');
+    assert.equal(config.sites.siteB.auth_status, 'expired');
+    assert.equal(config.sites.siteC.auth_status, 'expired');
+  });
+
+  it('first failure isolates — second site connects without re-attempting first', async () => {
+    // Pin: the loop must not re-enter a failed site. Capture call order.
+    const calls = [];
+    const config = makeConfig({
+      siteA: fakeOAuthSite(),
+      siteB: fakeOAuthSite(),
+    }, 'siteA');
+    const pool = new ConnectionPool(config, () => {});
+    pool._createTransport = async (key) => {
+      calls.push(key);
+      if (key === 'siteA') throw new Error('siteA failed');
+      return {
+        endpoint: 'https://b.example.com/x',
+        onMessage: null,
+        connect: async () => {},
+        send: () => {},
+        shutdown: async () => {},
+        isReady: () => true,
+      };
+    };
+
+    await pool.connectDefault(() => {});
+
+    assert.deepEqual(calls, ['siteA', 'siteB'],
+      'try order is configured-default-then-others; first failure does not retry');
+  });
+
+  it('error during _createTransport (not just connect) is also isolated', async () => {
+    // The auth-init boundary covers BOTH _createTransport (discovery,
+    // OAuth state setup) AND transport.connect() (token pre-fetch). Both
+    // must isolate per-site.
+    const config = makeConfig({
+      siteA: fakeOAuthSite(),
+      siteB: fakeOAuthSite(),
+    }, 'siteA');
+    const pool = makePoolWithStubs(config, {
+      siteA: { throwAtCreate: new Error('discovery failed for siteA') },
+      siteB: {},
+    });
+
+    const transport = await pool.connectDefault(() => {});
+
+    assert.ok(transport, 'siteB transport returned despite siteA discovery failure');
+    assert.equal(config.defaultSite, 'siteB');
+    assert.equal(config.sites.siteA.auth_status, 'expired');
+    assert.match(config.sites.siteA._degraded_reason, /discovery failed/);
+  });
+});
