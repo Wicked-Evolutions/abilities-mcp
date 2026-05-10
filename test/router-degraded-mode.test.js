@@ -171,6 +171,123 @@ describe('McpRouter — degraded mode (#76)', () => {
       'forwarded line reaches the default transport unchanged');
   });
 
+  it('request-time boundary (#76 follow-up) — initialize forward error → synthesized InitializeResult, NOT CallToolResult', () => {
+    // Operator reproduction (paste from PR-side captured evidence):
+    //   {"jsonrpc":"2.0","id":1,"result":{
+    //     "content":[{"type":"text","text":"[-32000] OAuth HTTP bridge error: ..."}],
+    //     "isError":true
+    //   }}
+    //
+    // This shape is CallToolResult, not InitializeResult — MCP SDK rejects it.
+    // The router must intercept error responses whose id matches the cached
+    // initialize and synthesize a valid InitializeResult locally before the
+    // generic JSON-RPC-error→CallToolResult conversion at the bottom of
+    // handleTransportMessage runs.
+    const sent = [];
+    const router = new McpRouter({
+      config: { defaultSite: 'wicked-community', sites: { 'wicked-community': {} } },
+      siteKeys: ['wicked-community'],
+      isMultiSite: false,
+      pool: { setHandshakeCache() {} },
+      catalog: { isEnabled: () => false, cacheTools() {}, getFilteredTools: () => [] },
+      sendToClient: (s) => sent.push(s),
+      log: () => {},
+    });
+    router.setDefaultTransport({ send: () => {} });
+
+    // 1. Client sends initialize — gets cached + forwarded.
+    router.handleClientMessage({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {} },
+    }, '<line>');
+
+    // 2. Transport emits the operator-reproduced error response shape:
+    //    error response with id matching the cached initialize id.
+    router.handleTransportMessage({
+      jsonrpc: '2.0', id: 1,
+      error: {
+        code: -32000,
+        message: 'OAuth HTTP bridge error: OAuth refresh failed: ' +
+          'Refresh token expired for site "wicked-community". ' +
+          'Run: abilities-mcp reauth wicked-community',
+      },
+    }, null);
+
+    // 3. Client must see InitializeResult shape — NOT the CallToolResult shape
+    //    that motivated this PR.
+    assert.ok(sent.length >= 1, 'router must emit a response to the client');
+    const last = JSON.parse(sent[sent.length - 1]);
+    assert.equal(last.id, 1);
+    assert.ok(last.result, 'response carries result, not error');
+    assert.equal(typeof last.result.protocolVersion, 'string',
+      'protocolVersion present — InitializeResult shape, not CallToolResult');
+    assert.equal(last.result.protocolVersion, '2025-06-18',
+      'echoes client protocolVersion per MCP negotiation');
+    assert.equal(typeof last.result.capabilities, 'object',
+      'capabilities object present');
+    assert.equal(typeof last.result.serverInfo, 'object',
+      'serverInfo object present');
+
+    // The CallToolResult-shape fields MUST NOT be present on the synthesized
+    // initialize response — they are how the MCP runtime detected the bug.
+    assert.equal(last.result.content, undefined,
+      'no content[] — that is CallToolResult shape, the gate-violating shape');
+    assert.equal(last.result.isError, undefined,
+      'no isError — that is CallToolResult shape, the gate-violating shape');
+
+    // 4. Bridge must enter degraded mode so subsequent tool calls behave
+    //    correctly and wp_bridge_health surfaces the failure.
+    assert.equal(router.degraded, true,
+      'router must enter degraded mode on initialize failure');
+    assert.equal(router.degradedSites.length, 1);
+    assert.equal(router.degradedSites[0].siteId, 'wicked-community');
+    assert.match(router.degradedSites[0].reason, /Refresh token expired/);
+  });
+
+  it('request-time boundary (#76 follow-up) — non-initialize error responses still convert to CallToolResult (regression)', () => {
+    // The intercept must ONLY fire for the cached initialize id. Other
+    // request errors (e.g. tools/call) must keep the existing CallToolResult
+    // conversion behavior — that's how MCP clients learn about per-call
+    // errors today.
+    const sent = [];
+    const router = new McpRouter({
+      config: { defaultSite: 'siteA', sites: { siteA: {} } },
+      siteKeys: ['siteA'],
+      isMultiSite: false,
+      pool: { setHandshakeCache() {} },
+      catalog: { isEnabled: () => false, cacheTools() {}, getFilteredTools: () => [] },
+      sendToClient: (s) => sent.push(s),
+      log: () => {},
+    });
+    router.setDefaultTransport({ send: () => {} });
+
+    // Cache an initialize at id=1
+    router.handleClientMessage({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-06-18' },
+    }, '<line>');
+
+    sent.length = 0;  // reset
+
+    // Transport emits an error for id=42 (some tools/call) — NOT the cached
+    // initialize id. Existing conversion semantics must still apply.
+    router.handleTransportMessage({
+      jsonrpc: '2.0', id: 42,
+      error: { code: -32603, message: 'tool failed' },
+    }, null);
+
+    assert.equal(sent.length, 1);
+    const last = JSON.parse(sent[0]);
+    assert.equal(last.id, 42);
+    assert.ok(last.result, 'tools-call error converts to CallToolResult shape');
+    assert.equal(last.result.isError, true);
+    assert.ok(Array.isArray(last.result.content));
+    assert.match(last.result.content[0].text, /tool failed/);
+
+    // Router must NOT have entered degraded mode for an unrelated tool error.
+    assert.equal(router.degraded, false);
+  });
+
   it('enterDegradedMode is reentrant — second call refreshes the degraded-sites list', () => {
     const { router, sent } = makeRouter();
     router.enterDegradedMode([{ siteId: 'newsite', reason: 'recheck' }]);
