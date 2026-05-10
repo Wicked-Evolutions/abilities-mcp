@@ -235,6 +235,45 @@ describe('sanitizeToolsList — [DISABLED] injection', () => {
   });
 });
 
+describe('sanitizeToolsList — inputSchema normalization (#78)', () => {
+  it('normalizes inputSchema: [] (PHP array() default) to {type:"object"}', () => {
+    const msg = makeToolsListMsg([makeTool({ inputSchema: [] })]);
+    sanitizeToolsList(msg);
+    assert.deepEqual(msg.result.tools[0].inputSchema, { type: 'object' });
+  });
+
+  it('normalizes inputSchema: null to {type:"object"}', () => {
+    const msg = makeToolsListMsg([makeTool({ inputSchema: null })]);
+    sanitizeToolsList(msg);
+    assert.deepEqual(msg.result.tools[0].inputSchema, { type: 'object' });
+  });
+
+  it('normalizes inputSchema: undefined to {type:"object"}', () => {
+    const msg = makeToolsListMsg([makeTool({ inputSchema: undefined })]);
+    sanitizeToolsList(msg);
+    assert.deepEqual(msg.result.tools[0].inputSchema, { type: 'object' });
+  });
+
+  it('normalizes inputSchema: "invalid string" (primitive) to {type:"object"}', () => {
+    const msg = makeToolsListMsg([makeTool({ inputSchema: 'invalid string' })]);
+    sanitizeToolsList(msg);
+    assert.deepEqual(msg.result.tools[0].inputSchema, { type: 'object' });
+  });
+
+  it('regression: valid inputSchema passes through byte-identical (no normalization, no mutation)', () => {
+    const validSchema = { type: 'object', properties: { foo: { type: 'string' } } };
+    const before = JSON.stringify(validSchema);
+    const msg = makeToolsListMsg([makeTool({ inputSchema: validSchema })]);
+
+    sanitizeToolsList(msg);
+
+    const after = msg.result.tools[0].inputSchema;
+    assert.equal(after, validSchema, 'inputSchema reference must be unchanged');
+    assert.equal(JSON.stringify(after), before, 'inputSchema must be byte-identical post-sanitize');
+    assert.deepEqual(after, { type: 'object', properties: { foo: { type: 'string' } } });
+  });
+});
+
 describe('sanitizeToolsList — multiple tools', () => {
   it('processes each tool independently', () => {
     const msg = makeToolsListMsg([
