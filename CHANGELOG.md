@@ -2,6 +2,18 @@
 
 All notable changes to Abilities MCP are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **Sanitizer normalizes array-shaped `inputSchema.properties` (Issue [#83](https://github.com/Wicked-Evolutions/abilities-mcp/issues/83), Sprint C 2026-05-11).** Extends `validateToolSchema` in `lib/sanitizer.js` so that when a tool's `inputSchema.properties` is an array (PHP `'properties' => array()` JSON-encodes to `[]`), `null`, a string, or any other non-plain-object value, it is normalized to `{}` before client emission. The previous v1.6.2 fix (#78/#79) normalized broken top-level `inputSchema` but left malformed nested `properties` untouched — the value passed `typeof === 'object'` (arrays are objects in JS) and reached the `Object.entries()` loop unchanged. Anthropic's draft 2020-12 validator rejects the entire `tools/list` payload on the first invalid schema (`/properties must be object`), so a single vendor-registered `properties: []` shape breaks the whole catalog. Defends against the entire class of vendor-registered ability schema slips that share the `properties: []` shape; SureCart's `surecart/get-store-info` was the trigger case (live capture from helenawillow.com 2026-05-11, 1 of 789 tools failing) but the fix is name-agnostic. Boundary discipline binding: `inputSchema: { type: "object" }` shapes that omit the `properties` key entirely remain byte-unchanged (early-return on `schema.properties === undefined` before the malformed-shape normalize). Already-valid object-shaped `properties` pass through byte-identical (regression-guarded with reference-equality assertion in `test/sanitizer.test.js`).
+
+### Compatibility & operator notes
+
+- **No protocol semantics change** for valid schemas. Healthy operators see no behavioral difference. The fix activates only on the malformed-`properties` shape it closes.
+- **No operator action required** — passive defensive normalization on next bridge restart.
+- **Coordinated release wave** — held for joint release with abilities-mcp-adapter v1.4.8 per the cross-sprint coupling decision.
+
 ## [1.6.2] - 2026-05-10
 
 Schema validity polish + boot fragility MVP + multisite topology gate. Four Bridge fixes ship together as a bundled release closing the operator-side schema-400 + the silent-bridge-death-on-expired-refresh-token (both connect-time and request-time refresh boundaries) + the misplaced-multisite-block-cross-product issues.
