@@ -274,6 +274,92 @@ describe('sanitizeToolsList — inputSchema normalization (#78)', () => {
   });
 });
 
+describe('sanitizeToolsList — inputSchema.properties normalization (#83)', () => {
+  it('positive: properties: [] → properties: {} (matches acceptance pin)', () => {
+    const msg = makeToolsListMsg([makeTool({
+      inputSchema: { type: 'object', properties: [] },
+    })]);
+
+    sanitizeToolsList(msg);
+
+    assert.deepEqual(msg.result.tools[0].inputSchema, {
+      type: 'object',
+      properties: {},
+    });
+  });
+
+  it('negative-control: object-shaped properties with real fields → byte-identical', () => {
+    const valid = {
+      type: 'object',
+      properties: { foo: { type: 'string' }, bar: { type: 'integer' } },
+      required: ['foo'],
+    };
+    const before = JSON.stringify(valid);
+    const msg = makeToolsListMsg([makeTool({ inputSchema: valid })]);
+
+    sanitizeToolsList(msg);
+
+    const after = msg.result.tools[0].inputSchema;
+    assert.equal(after, valid, 'inputSchema reference must be unchanged');
+    assert.equal(after.properties, valid.properties, 'properties reference must be unchanged');
+    assert.equal(JSON.stringify(after), before, 'inputSchema must be byte-identical');
+  });
+
+  it('boundary: no `properties` key → unchanged byte-for-byte (key stays absent)', () => {
+    const noProps = { type: 'object' };
+    const before = JSON.stringify(noProps);
+    const msg = makeToolsListMsg([makeTool({ inputSchema: noProps })]);
+
+    sanitizeToolsList(msg);
+
+    const after = msg.result.tools[0].inputSchema;
+    assert.equal(after, noProps, 'inputSchema reference must be unchanged');
+    assert.equal('properties' in after, false, '`properties` key must remain absent');
+    assert.equal(JSON.stringify(after), before, 'inputSchema must be byte-identical');
+  });
+
+  it('smuggling-defense: properties: "string" → properties: {}', () => {
+    const msg = makeToolsListMsg([makeTool({
+      inputSchema: { type: 'object', properties: 'oops' },
+    })]);
+
+    sanitizeToolsList(msg);
+
+    assert.deepEqual(msg.result.tools[0].inputSchema, {
+      type: 'object',
+      properties: {},
+    });
+  });
+
+  it('smuggling-defense: properties: null → properties: {}', () => {
+    const msg = makeToolsListMsg([makeTool({
+      inputSchema: { type: 'object', properties: null },
+    })]);
+
+    sanitizeToolsList(msg);
+
+    assert.deepEqual(msg.result.tools[0].inputSchema, {
+      type: 'object',
+      properties: {},
+    });
+  });
+
+  it('emits SCHEMA NORMALIZE log line when properties is malformed', () => {
+    const logs = [];
+    const msg = makeToolsListMsg([makeTool({
+      name: 'surecart-get-store-info',
+      inputSchema: { type: 'object', properties: [] },
+    })]);
+
+    sanitizeToolsList(msg, (line) => logs.push(line));
+
+    assert.ok(
+      logs.some((l) => l.includes('SCHEMA NORMALIZE') && l.includes('surecart-get-store-info')),
+      'expected a SCHEMA NORMALIZE log line for the affected tool'
+    );
+  });
+});
+
 describe('sanitizeToolsList — multiple tools', () => {
   it('processes each tool independently', () => {
     const msg = makeToolsListMsg([
