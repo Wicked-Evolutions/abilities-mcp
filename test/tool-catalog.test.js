@@ -121,6 +121,68 @@ describe('ToolCatalog', () => {
     assert.ok(summary[0].toolCount >= summary[summary.length - 1].toolCount);
   });
 
+  it('default mcp-adapter always-include applies when filtering is enabled and operator did not set alwaysIncludeCategories (#85)', () => {
+    // Match the operator's actual local config: { enabled: true }, no
+    // essentialTools, no alwaysIncludeCategories.
+    const catalog = new ToolCatalog({ toolFilter: { enabled: true } });
+    catalog.cacheTools([
+      { name: 'content-list' },
+      { name: 'content-get' },
+      { name: 'mcp-adapter-discover-abilities' },
+      { name: 'mcp-adapter-get-ability-info' },
+      { name: 'mcp-adapter-execute-ability' },
+      { name: 'fluent-crm-list-contacts' },
+    ]);
+
+    const filtered = catalog.getFilteredTools();
+    const names = filtered.map((t) => t.name);
+
+    // Acceptance pin: at minimum these three meta-tools must be visible.
+    assert.ok(names.includes('mcp-adapter-discover-abilities'));
+    assert.ok(names.includes('mcp-adapter-get-ability-info'));
+    assert.ok(names.includes('mcp-adapter-execute-ability'));
+
+    // Other categories still gated behind wp_load_tools.
+    assert.ok(!names.includes('content-list'));
+    assert.ok(!names.includes('fluent-crm-list-contacts'));
+  });
+
+  it('toolFilter.enabled = false leaves activeCategories untouched (no mcp-adapter default fires) (#85)', () => {
+    const catalog = new ToolCatalog({ toolFilter: { enabled: false } });
+
+    assert.equal(catalog.isEnabled(), false);
+    assert.equal(catalog.activeCategories.size, 0,
+      'no default category activation when filtering is disabled');
+    assert.equal(catalog.effectiveAlwaysInclude.size, 0,
+      'effectiveAlwaysInclude is empty under enabled:false — confirms no default');
+  });
+
+  it('explicit empty alwaysIncludeCategories preserves operator choice (does not fall back to mcp-adapter default) (#85)', () => {
+    const catalog = new ToolCatalog({
+      toolFilter: { enabled: true, alwaysIncludeCategories: [] },
+    });
+
+    assert.equal(catalog.effectiveAlwaysInclude.size, 0,
+      'operator-set empty list wins over the mcp-adapter default');
+    assert.equal(catalog.activeCategories.size, 0);
+  });
+
+  it('default mcp-adapter cannot be deactivated via wp_load_tools deactivate (#85)', () => {
+    const catalog = new ToolCatalog({ toolFilter: { enabled: true } });
+    catalog.cacheTools([
+      { name: 'mcp-adapter-discover-abilities' },
+      { name: 'mcp-adapter-execute-ability' },
+    ]);
+
+    catalog.deactivateCategories(['mcp-adapter']);
+
+    const filtered = catalog.getFilteredTools();
+    const names = filtered.map((t) => t.name);
+    assert.ok(names.includes('mcp-adapter-discover-abilities'),
+      'default-included mcp-adapter survives deactivateCategories — guarded by effectiveAlwaysInclude');
+    assert.ok(names.includes('mcp-adapter-execute-ability'));
+  });
+
   it('compound prefix extraction works for fluent-crm', () => {
     const catalog = makeCatalog();
     catalog.cacheTools([
