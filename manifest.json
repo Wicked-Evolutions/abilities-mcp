@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "abilities-mcp",
   "display_name": "WordPress (Abilities MCP)",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Connect AI clients to WordPress through the Abilities API. One-click bridge to your site's content, users, plugins, and Fluent ecosystem.",
   "long_description": "Abilities MCP is the open-source bridge that turns any WordPress site into a first-class MCP server. Install this bundle, type your site URL + WordPress username + application password, and your AI client gets typed access to content, users, media, plugins, themes, settings, FluentCRM/Forms/Community, and any other ability registered through the WordPress Abilities API.\n\nRequires the `abilities-mcp-adapter` and `abilities-for-ai` plugins on the WordPress site. The adapter exposes the MCP endpoint; this bundle is the client-side bridge running on your machine.",
   "author": {
