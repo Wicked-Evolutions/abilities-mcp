@@ -171,38 +171,86 @@ describe('McpRouter — degraded mode (#76)', () => {
       'forwarded line reaches the default transport unchanged');
   });
 
-  it('request-time boundary (#76 follow-up) — initialize forward error → synthesized InitializeResult, NOT CallToolResult', () => {
-    // Operator reproduction (paste from PR-side captured evidence):
-    //   {"jsonrpc":"2.0","id":1,"result":{
-    //     "content":[{"type":"text","text":"[-32000] OAuth HTTP bridge error: ..."}],
-    //     "isError":true
-    //   }}
-    //
-    // This shape is CallToolResult, not InitializeResult — MCP SDK rejects it.
-    // The router must intercept error responses whose id matches the cached
-    // initialize and synthesize a valid InitializeResult locally before the
-    // generic JSON-RPC-error→CallToolResult conversion at the bottom of
-    // handleTransportMessage runs.
+  it('request-time boundary (#87 S1/S2) — default-site initialize failure falls back to a healthy site, bridge NOT degraded', async () => {
+    // Issue #87 S1: the #82 follow-up made a single default-site request-time
+    // refresh failure flip the WHOLE router to degraded (and it never
+    // recovered — S2). Correct behavior mirrors the boot path: try a healthy
+    // fallback site, re-forward the cached initialize through it, stay healthy.
+    const sent = [];
+    const fallbackTransport = { send: (l) => sent.push(`[fallback-tx]${l}`) };
+    let connectFallbackArgs = null;
+    const router = new McpRouter({
+      config: { defaultSite: 'wickedevolutions', sites: { wickedevolutions: {}, helenawillow: {} } },
+      siteKeys: ['wickedevolutions', 'helenawillow'],
+      isMultiSite: true,
+      pool: {
+        setHandshakeCache() {},
+        async connectFallback(failedSiteId) {
+          connectFallbackArgs = failedSiteId;
+          this._cfg.defaultSite = 'helenawillow'; // pool promotes runtime default
+          return fallbackTransport;
+        },
+        _cfg: null,
+      },
+      catalog: { isEnabled: () => false, cacheTools() {}, getFilteredTools: () => [] },
+      sendToClient: (s) => sent.push(s),
+      log: () => {},
+    });
+    router.pool._cfg = router.config; // pool mutates config.defaultSite like the real pool
+    router.setDefaultTransport({ send: () => {} });
+
+    router.handleClientMessage({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {} },
+    }, JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {} } }));
+
+    router.handleTransportMessage({
+      jsonrpc: '2.0', id: 1,
+      error: { code: -32000, message: 'OAuth HTTP bridge error: Refresh token expired for site "wickedevolutions"' },
+    }, null);
+
+    await router._initFailurePromise; // deterministic: await the fallback
+
+    assert.equal(connectFallbackArgs, 'wickedevolutions', 'pool.connectFallback invoked excluding the failed default site');
+    assert.equal(router.degraded, false, 'S1: bridge stays healthy — single default-site failure does NOT degrade the whole router');
+    assert.equal(router.config.defaultSite, 'helenawillow', 'runtime default promoted to the healthy fallback site');
+    // Cached initialize re-forwarded through the fallback transport (so the
+    // client gets a real InitializeResult and the catalog populates normally
+    // — S2: no stale/empty per-session catalog).
+    assert.ok(
+      sent.some((s) => s.startsWith('[fallback-tx]') && s.includes('"method":"initialize"')),
+      'S2: cached initialize re-forwarded via the healthy fallback transport'
+    );
+    // No synthesized degraded InitializeResult was emitted to the client.
+    assert.ok(
+      !sent.some((s) => { try { const m = JSON.parse(s); return m.result && m.result.serverInfo && /degraded/.test(m.result.serverInfo.name); } catch { return false; } }),
+      'no synthesized "(degraded)" InitializeResult — the real one comes from the fallback site'
+    );
+  });
+
+  it('regression guard (#76 / #87) — when ALL sites fail (no fallback) the bridge still synthesizes InitializeResult + enters degraded mode', async () => {
+    // The #76 gate must still hold: genuine all-sites-down must NOT kill init.
+    // Single-site config → connectFallback has nothing to fall back to → null.
     const sent = [];
     const router = new McpRouter({
       config: { defaultSite: 'wicked-community', sites: { 'wicked-community': {} } },
       siteKeys: ['wicked-community'],
       isMultiSite: false,
-      pool: { setHandshakeCache() {} },
+      pool: {
+        setHandshakeCache() {},
+        async connectFallback() { return null; }, // no other site can serve
+      },
       catalog: { isEnabled: () => false, cacheTools() {}, getFilteredTools: () => [] },
       sendToClient: (s) => sent.push(s),
       log: () => {},
     });
     router.setDefaultTransport({ send: () => {} });
 
-    // 1. Client sends initialize — gets cached + forwarded.
     router.handleClientMessage({
       jsonrpc: '2.0', id: 1, method: 'initialize',
       params: { protocolVersion: '2025-06-18', capabilities: {} },
     }, '<line>');
 
-    // 2. Transport emits the operator-reproduced error response shape:
-    //    error response with id matching the cached initialize id.
     router.handleTransportMessage({
       jsonrpc: '2.0', id: 1,
       error: {
@@ -213,32 +261,18 @@ describe('McpRouter — degraded mode (#76)', () => {
       },
     }, null);
 
-    // 3. Client must see InitializeResult shape — NOT the CallToolResult shape
-    //    that motivated this PR.
-    assert.ok(sent.length >= 1, 'router must emit a response to the client');
+    await router._initFailurePromise;
+
     const last = JSON.parse(sent[sent.length - 1]);
     assert.equal(last.id, 1);
     assert.ok(last.result, 'response carries result, not error');
-    assert.equal(typeof last.result.protocolVersion, 'string',
-      'protocolVersion present — InitializeResult shape, not CallToolResult');
-    assert.equal(last.result.protocolVersion, '2025-06-18',
-      'echoes client protocolVersion per MCP negotiation');
-    assert.equal(typeof last.result.capabilities, 'object',
-      'capabilities object present');
-    assert.equal(typeof last.result.serverInfo, 'object',
-      'serverInfo object present');
+    assert.equal(last.result.protocolVersion, '2025-06-18', 'echoes client protocolVersion');
+    assert.equal(typeof last.result.capabilities, 'object', 'capabilities present');
+    assert.equal(typeof last.result.serverInfo, 'object', 'serverInfo present');
+    assert.equal(last.result.content, undefined, 'not CallToolResult shape');
+    assert.equal(last.result.isError, undefined, 'not CallToolResult shape');
 
-    // The CallToolResult-shape fields MUST NOT be present on the synthesized
-    // initialize response — they are how the MCP runtime detected the bug.
-    assert.equal(last.result.content, undefined,
-      'no content[] — that is CallToolResult shape, the gate-violating shape');
-    assert.equal(last.result.isError, undefined,
-      'no isError — that is CallToolResult shape, the gate-violating shape');
-
-    // 4. Bridge must enter degraded mode so subsequent tool calls behave
-    //    correctly and wp_bridge_health surfaces the failure.
-    assert.equal(router.degraded, true,
-      'router must enter degraded mode on initialize failure');
+    assert.equal(router.degraded, true, 'all-sites-down → degraded mode (the #76 gate still fires)');
     assert.equal(router.degradedSites.length, 1);
     assert.equal(router.degradedSites[0].siteId, 'wicked-community');
     assert.match(router.degradedSites[0].reason, /Refresh token expired/);
