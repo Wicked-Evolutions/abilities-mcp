@@ -250,6 +250,125 @@ describe('TokenManager.refresh — retry semantics', () => {
   });
 });
 
+describe('TokenManager.refresh — #90 opt-in sliding renewal', () => {
+  const NINETY_D = 90 * 24 * 3600 * 1000;
+
+  async function freshRefresh(server, clockMs, siteOverrides) {
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/access', 'AT-old');
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT-old');
+    const tm = new TokenManager({
+      secretStore: store, allowInsecure: true,
+      deps: { now: () => clockMs.t },
+    });
+    return tm.refresh(buildSiteAuth({
+      tokenEndpoint: `${server.origin}/oauth/token`,
+      ...siteOverrides,
+    }));
+  }
+
+  it('flag ON — a successful refresh slides refresh_token_expires_at to now+90d; stays alive indefinitely while used', async () => {
+    const server = await new MockAuthServer().start();
+    try {
+      const clock = { t: Date.parse('2026-06-01T00:00:00Z') };
+      const frozenIssued = '2026-08-01T00:00:00Z'; // original bounded expiry
+
+      const r1 = await freshRefresh(server, clock, {
+        authStatus: 'active', slidingRenewal: true, refreshTokenExpiresAt: frozenIssued,
+      });
+      assert.equal(r1.updatedAuth.refreshTokenExpiresAt,
+        new Date(clock.t + NINETY_D).toISOString(),
+        'slid to now+90d (adapter REFRESH_TTL mirror), not the frozen issuance value');
+      assert.notEqual(r1.updatedAuth.refreshTokenExpiresAt, frozenIssued);
+
+      // Use it again 60 days later — still within the slid window → slides again.
+      clock.t += 60 * 24 * 3600 * 1000;
+      const r2 = await freshRefresh(server, clock, {
+        authStatus: 'active', slidingRenewal: true,
+        refreshTokenExpiresAt: r1.updatedAuth.refreshTokenExpiresAt,
+      });
+      assert.equal(r2.updatedAuth.refreshTokenExpiresAt,
+        new Date(clock.t + NINETY_D).toISOString());
+      assert.ok(
+        Date.parse(r2.updatedAuth.refreshTokenExpiresAt) > Date.parse(r1.updatedAuth.refreshTokenExpiresAt),
+        'window strictly advances on each use → effectively non-expiring while in use'
+      );
+    } finally { await server.stop(); }
+  });
+
+  it('flag OFF (default-preserved guard) — refresh_token_expires_at is BYTE-IDENTICAL across refreshes; no slide, no new write', async () => {
+    const server = await new MockAuthServer().start();
+    try {
+      const clock = { t: Date.parse('2026-06-01T00:00:00Z') };
+      const frozenIssued = '2026-08-01T00:00:00Z';
+
+      // Default: flag absent entirely.
+      const rAbsent = await freshRefresh(server, clock, {
+        authStatus: 'active', refreshTokenExpiresAt: frozenIssued,
+      });
+      assert.equal(rAbsent.updatedAuth.refreshTokenExpiresAt, frozenIssued,
+        'flag absent → unchanged (bounded ~90-days-from-initial-auth preserved)');
+
+      // Explicit false, and a non-true truthy value — both default path.
+      clock.t += 10 * 24 * 3600 * 1000;
+      const rFalse = await freshRefresh(server, clock, {
+        authStatus: 'active', slidingRenewal: false, refreshTokenExpiresAt: frozenIssued,
+      });
+      assert.equal(rFalse.updatedAuth.refreshTokenExpiresAt, frozenIssued);
+      const rTruthy = await freshRefresh(server, clock, {
+        authStatus: 'active', slidingRenewal: 1, refreshTokenExpiresAt: frozenIssued,
+      });
+      assert.equal(rTruthy.updatedAuth.refreshTokenExpiresAt, frozenIssued,
+        'strictly === true required — truthy-but-not-true is still default');
+    } finally { await server.stop(); }
+  });
+
+  it('idle past the window — even with sliding ON, an expired+past site lapses to reauth (#89 path; sliding only acts on a SUCCESSFUL refresh)', async () => {
+    const tm = new TokenManager({ secretStore: new MemorySecretStore() });
+    await assert.rejects(
+      tm.refresh(buildSiteAuth({
+        slidingRenewal: true,
+        authStatus: 'expired',
+        refreshTokenExpiresAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+      })),
+      (err) => err instanceof RefreshError && err.code === 'reauth_required'
+    );
+  });
+
+  it('REVOKED / terminal-4xx unaffected by sliding ON — no slide on a non-success', async () => {
+    // REVOKED stays terminal.
+    const tm0 = new TokenManager({ secretStore: new MemorySecretStore() });
+    await assert.rejects(
+      tm0.refresh(buildSiteAuth({
+        slidingRenewal: true, authStatus: 'revoked',
+        refreshTokenExpiresAt: new Date(Date.now() + 88 * 24 * 3600 * 1000).toISOString(),
+      })),
+      (err) => err instanceof RefreshError && err.code === 'revoked'
+    );
+    // Terminal 4xx: still marks expired; sliding never advances expiry on failure.
+    const server = await new MockAuthServer({ refresh4xx: { error: 'invalid_client' } }).start();
+    try {
+      const store = new MemorySecretStore();
+      await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
+      await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+      const tm = new TokenManager({ secretStore: store, allowInsecure: true, deps: { sleep: () => Promise.resolve() } });
+      const frozenIssued = '2026-08-01T00:00:00Z';
+      let caught;
+      try {
+        await tm.refresh(buildSiteAuth({
+          tokenEndpoint: `${server.origin}/oauth/token`,
+          slidingRenewal: true, authStatus: 'active',
+          refreshTokenExpiresAt: frozenIssued,
+        }));
+      } catch (e) { caught = e; }
+      assert.equal(caught.code, 'invalid_client', 'explicitly-terminal error');
+      assert.equal(caught.updatedAuth.authStatus, 'expired');
+      assert.equal(caught.updatedAuth.refreshTokenExpiresAt, frozenIssued,
+        'sliding NEVER advances expiry on a failed refresh — only on success');
+    } finally { await server.stop(); }
+  });
+});
+
 describe('TokenManager.persistTokens', () => {
   it('writes access + refresh and returns refs with computed expiries', async () => {
     const store = new MemorySecretStore();
