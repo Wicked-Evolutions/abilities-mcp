@@ -66,9 +66,13 @@ describe('CLI test (ping + scope summary)', () => {
     assert.notEqual(cfg.sites.mock.auth.access_token_expires_at, past);
   });
 
-  it('marks site auth_status=expired on 4xx refresh', async () => {
+  it('marks site auth_status=expired on a terminal 4xx refresh', async () => {
+    // #89: a bare `invalid_grant` while the refresh token is still valid is
+    // now treated as transient (retryable, no persist). This test's intent is
+    // the terminal path — use an explicitly-terminal OAuth error so it still
+    // exercises "terminal 4xx → auth_status=expired + reauth instruction".
     const past = new Date(Date.now() - 1000).toISOString();
-    server.config.refresh4xx = { error: 'invalid_grant' };
+    server.config.refresh4xx = { error: 'invalid_client' };
     seed({ auth: { access_token_expires_at: past } });
     const fakeRequest = async () => ({ statusCode: 200, headers: {}, body: '{}', json: {} });
     const r = await h.runCli('test', ['mock'], { request: fakeRequest });

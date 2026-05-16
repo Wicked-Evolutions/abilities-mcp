@@ -231,9 +231,12 @@ describe('OAuthHttpTransport — terminal 401 after refresh', () => {
     }
   });
 
-  it('a refresh that 4xxs surfaces error and emits onAuthStatusChange(expired)', async () => {
+  it('a refresh that 4xxs with a terminal error surfaces error and emits onAuthStatusChange(expired)', async () => {
+    // #89: bare `invalid_grant` + still-valid refresh token is now transient
+    // (no auth_status flip). This test asserts the terminal persist path —
+    // drive it with an explicitly-terminal OAuth error.
     const server = await new MockAuthServer({
-      refresh4xx: { error: 'invalid_grant' },
+      refresh4xx: { error: 'invalid_client' },
     }).start();
     const resource = await new MockMcpResource({ acceptedTokens: ['AT-NOT-USED'] }).start();
     const store = new MemorySecretStore();
