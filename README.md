@@ -272,6 +272,27 @@ Bare `abilities-mcp` (no subcommand) starts the MCP STDIO server — the mode ev
 
 OAuth-managed sites added through `abilities-mcp add-site` are written to `~/.abilities-mcp/wp-sites.json` automatically — they carry an `auth.method: "oauth"` block with keychain references rather than inline secrets.
 
+### Sliding-renewal OAuth (opt-in, off by default)
+
+By default an OAuth credential is bounded: the refresh token expires roughly **90 days after the initial authorization**, regardless of how often the site is used, after which `reauth` is required. This is unchanged and remains the default for every site.
+
+You can opt a site into **silent sliding renewal** by setting `"sliding_renewal": true` inside that site's `auth` block in `wp-sites.json`:
+
+```json
+"sites": {
+  "mysite": {
+    "url": "https://example.com",
+    "auth": { "method": "oauth", "sliding_renewal": true, "...": "..." }
+  }
+}
+```
+
+With it enabled, every successful token refresh advances the refresh-token expiry, so a site that is **actively used keeps renewing indefinitely and never forces reauth**. It still lapses normally if the site is left untouched past the window (no refresh within ~90 days → next use requires `reauth`).
+
+> ⚠️ **Security trade-off — explicit operator choice.** Sliding renewal extends the refresh window indefinitely for actively-used sites. A leaked or exfiltrated refresh token therefore has a **longer blast radius** than the default bounded credential (which self-expires ≤90 days after initial authorization no matter what). Enable it only per-site, deliberately, for sites where uninterrupted automation outweighs that exposure. It is never enabled implicitly, never by migration, and never by `add-site`/`reauth` — you must set the flag yourself.
+
+It is per-site: sites without the flag keep the default bounded behavior, byte-for-byte. `abilities-mcp list-sites` shows each OAuth site's actual `refresh_token_expires_at` so you can see the live window.
+
 ### Config search order
 
 1. `--config=/path/to/wp-sites.json` (explicit)
