@@ -77,7 +77,12 @@ describe('TokenManager.refresh — retry semantics', () => {
     } finally { await server.stop(); }
   });
 
-  it('does NOT retry on 4xx — surfaces RefreshError + reauth hint, marks expired', async () => {
+  it('does NOT retry on 4xx; #89 — a transient invalid_grant while the refresh token is still valid is RETRYABLE and does NOT flip auth_status', async () => {
+    // Issue #76/#89: a lone `invalid_grant` can be a transient server-state
+    // hiccup. With the refresh token still valid for ~90 days (buildSiteAuth
+    // default), it must NOT persist authStatus="expired" — that evidence-free
+    // write is exactly what armed the sticky-expired trap. Surface a retryable
+    // error and leave auth_status untouched (no `updatedAuth`, no reauth hint).
     const server = await new MockAuthServer({ refresh4xx: { error: 'invalid_grant' } }).start();
     try {
       const store = new MemorySecretStore();
@@ -93,13 +98,57 @@ describe('TokenManager.refresh — retry semantics', () => {
       }
       assert.ok(caught instanceof RefreshError, 'expected RefreshError');
       assert.equal(caught.code, 'invalid_grant');
-      assert.equal(caught.updatedAuth.authStatus, 'expired');
-      assert.deepEqual(caught.reauthHint, {
-        siteId: 'siteA',
-        command: 'abilities-mcp reauth siteA',
-      });
-      // Only 1 attempt — no retry on 4xx.
+      assert.equal(caught.retryable, true, 'transient: marked retryable');
+      assert.equal(caught.updatedAuth, undefined, 'auth_status NOT flipped — no persist trigger (the #89 fix)');
+      assert.equal(caught.reauthHint, undefined, 'no reauth hint for a transient');
+      assert.match(caught.message, /Transient/i);
+      // Still only 1 token-endpoint attempt — no HTTP retry on 4xx.
       assert.equal(server._refreshAttempts, 1);
+    } finally { await server.stop(); }
+  });
+
+  it('#89 — an explicitly-terminal OAuth error (invalid_client) DOES mark expired + reauth hint', async () => {
+    // Strong terminal evidence: the grant is really gone. Preserve the
+    // operator-routing terminal behavior regardless of refresh-token expiry.
+    const server = await new MockAuthServer({ refresh4xx: { error: 'invalid_client' } }).start();
+    try {
+      const store = new MemorySecretStore();
+      await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
+      await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+      const tm = new TokenManager({ secretStore: store, allowInsecure: true, deps: { sleep: () => Promise.resolve() } });
+      let caught;
+      try {
+        await tm.refresh(buildSiteAuth({ tokenEndpoint: `${server.origin}/oauth/token` }));
+      } catch (err) { caught = err; }
+      assert.ok(caught instanceof RefreshError);
+      assert.equal(caught.code, 'invalid_client');
+      assert.equal(caught.updatedAuth.authStatus, 'expired', 'terminal error → persist expired');
+      assert.deepEqual(caught.reauthHint, { siteId: 'siteA', command: 'abilities-mcp reauth siteA' });
+      assert.notEqual(caught.retryable, true);
+    } finally { await server.stop(); }
+  });
+
+  it('#89 Case 4 (genuine expiry preserved) — 4xx with a PAST refresh_token_expires_at marks expired + reauth hint', async () => {
+    // The refresh token is genuinely past expiry: even a bare `invalid_grant`
+    // is now strong terminal evidence. This is the path the fix must NOT
+    // weaken — explicit regression guard.
+    const server = await new MockAuthServer({ refresh4xx: { error: 'invalid_grant' } }).start();
+    try {
+      const store = new MemorySecretStore();
+      await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
+      await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+      const tm = new TokenManager({ secretStore: store, allowInsecure: true, deps: { sleep: () => Promise.resolve() } });
+      let caught;
+      try {
+        await tm.refresh(buildSiteAuth({
+          tokenEndpoint: `${server.origin}/oauth/token`,
+          refreshTokenExpiresAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString(), // expired yesterday
+        }));
+      } catch (err) { caught = err; }
+      assert.ok(caught instanceof RefreshError);
+      assert.equal(caught.updatedAuth.authStatus, 'expired', 'genuine expiry → terminal (Case 4 preserved)');
+      assert.deepEqual(caught.reauthHint, { siteId: 'siteA', command: 'abilities-mcp reauth siteA' });
+      assert.equal(server._refreshAttempts, 1, 'endpoint was attempted (real 4xx is the authority)');
     } finally { await server.stop(); }
   });
 
@@ -144,11 +193,59 @@ describe('TokenManager.refresh — retry semantics', () => {
     assert.equal(await store.get(SECRET_SERVICE, 'siteA/refresh-intent'), null, 'no refresh-intent marker after success');
   });
 
-  it('refuses to refresh when authStatus is already expired', async () => {
+  it('#76/#89 — short-circuits on cached authStatus="expired" ONLY when refresh_token_expires_at is genuinely past/missing', async () => {
+    // Previously this short-circuited on the cached enum alone (the sticky
+    // trap). Corrected condition (#76/#89): the cached "expired" is only
+    // believed when the on-disk refresh-token expiry agrees. A past expiry
+    // (or a missing one) → short-circuit with the reauth instruction, without
+    // hitting the network.
     const tm = new TokenManager({ secretStore: new MemorySecretStore() });
     await assert.rejects(
-      tm.refresh(buildSiteAuth({ authStatus: 'expired' })),
-      /reauth_required|expired/i
+      tm.refresh(buildSiteAuth({
+        authStatus: 'expired',
+        refreshTokenExpiresAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+      })),
+      (err) => err instanceof RefreshError && err.code === 'reauth_required'
+    );
+    await assert.rejects(
+      tm.refresh(buildSiteAuth({ authStatus: 'expired', refreshTokenExpiresAt: undefined })),
+      (err) => err instanceof RefreshError && err.code === 'reauth_required'
+    );
+  });
+
+  it('#89 Case 1 (the core fix) — cached authStatus="expired" but refresh token still valid → refresh attempts the endpoint and SUCCEEDS, self-heals to active', async () => {
+    // The operator incident: a long-past transient flipped the flag while the
+    // refresh token is valid for +88d. Pre-fix this threw reauth_required
+    // without ever contacting the token endpoint. Post-fix it must attempt
+    // the refresh and recover with no manual reauth (matches #76 Path-A live
+    // validation: clearing the flag alone was sufficient).
+    const server = await new MockAuthServer().start(); // healthy: would 200
+    try {
+      const store = new MemorySecretStore();
+      await store.set(SECRET_SERVICE, 'siteA/access', 'AT-old');
+      await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT-alive');
+      const tm = new TokenManager({ secretStore: store, allowInsecure: true });
+      const { tokens, updatedAuth } = await tm.refresh(buildSiteAuth({
+        tokenEndpoint: `${server.origin}/oauth/token`,
+        authStatus: 'expired',
+        refreshTokenExpiresAt: new Date(Date.now() + 88 * 24 * 3600 * 1000).toISOString(),
+      }));
+      assert.match(tokens.access_token, /^at-/, 'fresh access token issued');
+      assert.equal(updatedAuth.authStatus, 'active', 'self-heals: authStatus back to active');
+      assert.equal(server._refreshAttempts, 1, 'the token endpoint WAS contacted (no short-circuit)');
+    } finally { await server.stop(); }
+  });
+
+  it('#89 — REVOKED stays terminal regardless of refresh_token_expires_at', async () => {
+    // REVOKED is an explicit terminal state — must not be softened by the
+    // expiry-aware path.
+    const tm = new TokenManager({ secretStore: new MemorySecretStore() });
+    await assert.rejects(
+      tm.refresh(buildSiteAuth({
+        authStatus: 'revoked',
+        refreshTokenExpiresAt: new Date(Date.now() + 88 * 24 * 3600 * 1000).toISOString(),
+      })),
+      (err) => err instanceof RefreshError && err.code === 'revoked'
     );
   });
 });
