@@ -185,8 +185,8 @@ describe('McpRouter — degraded mode (#76)', () => {
       isMultiSite: true,
       pool: {
         setHandshakeCache() {},
-        async connectFallback(failedSiteId) {
-          connectFallbackArgs = failedSiteId;
+        async connectFallback(excludeSiteIds) {
+          connectFallbackArgs = excludeSiteIds;
           this._cfg.defaultSite = 'helenawillow'; // pool promotes runtime default
           return fallbackTransport;
         },
@@ -211,7 +211,7 @@ describe('McpRouter — degraded mode (#76)', () => {
 
     await router._initFailurePromise; // deterministic: await the fallback
 
-    assert.equal(connectFallbackArgs, 'wickedevolutions', 'pool.connectFallback invoked excluding the failed default site');
+    assert.deepEqual(connectFallbackArgs, ['wickedevolutions'], 'pool.connectFallback invoked with the accumulated exclude set (failed default site)');
     assert.equal(router.degraded, false, 'S1: bridge stays healthy — single default-site failure does NOT degrade the whole router');
     assert.equal(router.config.defaultSite, 'helenawillow', 'runtime default promoted to the healthy fallback site');
     // Cached initialize re-forwarded through the fallback transport (so the
@@ -276,6 +276,83 @@ describe('McpRouter — degraded mode (#76)', () => {
     assert.equal(router.degradedSites.length, 1);
     assert.equal(router.degradedSites[0].siteId, 'wicked-community');
     assert.match(router.degradedSites[0].reason, /Refresh token expired/);
+  });
+
+  it('convergence guard (#87 PR#88 reviewer blocker) — two OAuth-like sites that connect OK but both fail the re-forwarded initialize MUST converge to synthesized InitializeResult + degraded mode (no infinite alternation)', async () => {
+    // OAuth transport.connect() does NOT validate refresh tokens, so a
+    // freshly-connected fallback can itself fail the re-forwarded initialize.
+    // Without an accumulated exclude set the router alternates siteA→siteB→
+    // siteA… forever, degraded never fires, the #76 gate never holds. The
+    // router must track every site that failed the cached initialize and
+    // degrade once the candidate pool is exhausted.
+    const sent = [];
+    const config = { defaultSite: 'siteA', sites: { siteA: {}, siteB: {} } };
+
+    // A transport that "connected" (no token validation) but fails the
+    // re-forwarded cached initialize — emits an error carrying the cached
+    // initialize id, naming whatever site is currently the runtime default.
+    const badTransport = () => ({
+      send() {
+        queueMicrotask(() => router.handleTransportMessage({
+          jsonrpc: '2.0', id: 1,
+          error: { code: -32000, message: `Refresh token expired for site "${config.defaultSite}"` },
+        }, null));
+      },
+    });
+
+    const connectFallbackExcludes = [];
+    const router = new McpRouter({
+      config,
+      siteKeys: ['siteA', 'siteB'],
+      isMultiSite: true,
+      pool: {
+        setHandshakeCache() {},
+        async connectFallback(excludeSiteIds) {
+          connectFallbackExcludes.push([...excludeSiteIds]);
+          const ex = new Set(excludeSiteIds);
+          const next = ['siteA', 'siteB'].find((s) => !ex.has(s));
+          if (!next) return null;            // pool exhausted → caller degrades
+          config.defaultSite = next;          // pool promotes runtime default
+          return badTransport();              // connects, but will fail init too
+        },
+      },
+      catalog: { isEnabled: () => false, cacheTools() {}, getFilteredTools: () => [] },
+      sendToClient: (s) => sent.push(s),
+      log: () => {},
+    });
+    router.setDefaultTransport(badTransport());
+
+    router.handleClientMessage({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {} },
+    }, JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } }));
+
+    // Pump microtasks until convergence, capped well below "forever" — if the
+    // alternation bug were present this cap would trip before router.degraded.
+    for (let i = 0; i < 20 && !router.degraded; i++) {
+      await new Promise((r) => setImmediate(r));
+    }
+
+    assert.equal(router.degraded, true,
+      'converged: every site failed the cached initialize → #76 all-sites-down gate fired (no infinite alternation)');
+    // The exclude set must have strictly grown ([] → [siteA] → [siteA,siteB]).
+    const lastExclude = connectFallbackExcludes[connectFallbackExcludes.length - 1];
+    assert.deepEqual([...lastExclude].sort(), ['siteA', 'siteB'],
+      'router accumulated BOTH failed sites before degrading');
+    assert.ok(connectFallbackExcludes.length <= 3,
+      `bounded number of fallback attempts (got ${connectFallbackExcludes.length}) — strictly converging, not alternating`);
+
+    const last = JSON.parse(sent[sent.length - 1]);
+    assert.equal(last.id, 1);
+    assert.equal(last.result.protocolVersion, '2025-06-18', 'synthesized InitializeResult (the #76 gate)');
+    assert.equal(typeof last.result.serverInfo, 'object');
+    assert.equal(last.result.content, undefined, 'not CallToolResult shape');
+
+    const degradedIds = router.degradedSites.map((s) => s.siteId).sort();
+    assert.deepEqual(degradedIds, ['siteA', 'siteB'], 'both sites reported degraded');
+    for (const ds of router.degradedSites) {
+      assert.match(ds.reason, /Refresh token expired/, `per-site initialize-failure reason recorded for ${ds.siteId}`);
+    }
   });
 
   it('request-time boundary (#76 follow-up) — non-initialize error responses still convert to CallToolResult (regression)', () => {

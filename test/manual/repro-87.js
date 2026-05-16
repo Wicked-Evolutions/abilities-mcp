@@ -39,8 +39,8 @@ async function symptom1() {
     isMultiSite: true,
     pool: {
       setHandshakeCache() {},
-      async connectFallback(failedSiteId) {
-        assert.equal(failedSiteId, 'wickedevolutions');
+      async connectFallback(excludeSiteIds) {
+        assert.deepEqual(excludeSiteIds, ['wickedevolutions']);
         config.defaultSite = 'helenawillow';
         return fallbackTx;
       },
@@ -74,6 +74,58 @@ async function symptom1() {
   );
   assert.ok(sent.some((s) => s.startsWith('[fallback-tx]')), 'S1: call routed to the healthy default transport');
   console.log('S1 FIXED: one default-site refresh expiry → fallback to healthy site; bridge stays healthy; healthy-site tools/call served (no -32603 blast radius).');
+}
+
+// S1b — reviewer blocker (PR #88): two OAuth-like sites that connect OK but
+// both fail the re-forwarded initialize must CONVERGE to degraded, not loop.
+async function symptom1bConvergence() {
+  const sent = [];
+  const config = { defaultSite: 'siteA', sites: { siteA: {}, siteB: {} } };
+  const badTx = () => ({
+    send() {
+      queueMicrotask(() => router.handleTransportMessage({
+        jsonrpc: '2.0', id: 1,
+        error: { code: -32000, message: `Refresh token expired for site "${config.defaultSite}"` },
+      }, null));
+    },
+  });
+  const excludes = [];
+  const router = new McpRouter({
+    config,
+    siteKeys: ['siteA', 'siteB'],
+    isMultiSite: true,
+    pool: {
+      setHandshakeCache() {},
+      async connectFallback(excludeSiteIds) {
+        excludes.push([...excludeSiteIds]);
+        const ex = new Set(excludeSiteIds);
+        const next = ['siteA', 'siteB'].find((s) => !ex.has(s));
+        if (!next) return null;
+        config.defaultSite = next;
+        return badTx();
+      },
+    },
+    catalog: { isEnabled: () => false, cacheTools() {}, getFilteredTools: () => [] },
+    sendToClient: (s) => sent.push(s),
+    log: () => {},
+  });
+  router.setDefaultTransport(badTx());
+
+  router.handleClientMessage(
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })
+  );
+  for (let i = 0; i < 20 && !router.degraded; i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+
+  assert.equal(router.degraded, true, 'S1b: converged to degraded (no infinite alternation)');
+  assert.ok(excludes.length <= 3, `S1b: bounded fallback attempts (${excludes.length})`);
+  assert.deepEqual([...excludes[excludes.length - 1]].sort(), ['siteA', 'siteB'], 'S1b: both sites accumulated before degrading');
+  const last = JSON.parse(sent[sent.length - 1]);
+  assert.equal(last.result.protocolVersion, '2025-06-18', 'S1b: synthesized InitializeResult (the #76 gate)');
+  assert.deepEqual(router.degradedSites.map((s) => s.siteId).sort(), ['siteA', 'siteB'], 'S1b: both sites degraded');
+  console.log(`S1b FIXED: two OAuth-like sites that connect but both fail initialize → converged in ${excludes.length} fallback round(s) to synthesized InitializeResult + degraded (#76 gate fires; no infinite loop).`);
 }
 
 async function symptom2() {
@@ -128,8 +180,9 @@ function symptom3() {
 (async () => {
   let passed = 0;
   await symptom1(); passed++;
+  await symptom1bConvergence(); passed++;
   await symptom2(); passed++;
   symptom3(); passed++;
-  console.log(`\n#87 fix-proof: ${passed}/3 symptoms corrected (bridge units + adapter config; not the MCP path).`);
-  process.exit(passed === 3 ? 0 : 1);
+  console.log(`\n#87 fix-proof: ${passed}/4 checks corrected (S1, S1b convergence, S2, S3 — bridge units + adapter config; not the MCP path).`);
+  process.exit(passed === 4 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });
