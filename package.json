@@ -1,6 +1,6 @@
 {
   "name": "@wickedevolutions/abilities-mcp",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "description": "Open-source MCP bridge connecting AI clients to WordPress through the Abilities API — multi-site routing, zero dependencies",
   "main": "abilities-mcp.js",
   "bin": {
