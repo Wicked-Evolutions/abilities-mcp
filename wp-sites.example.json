@@ -6,7 +6,7 @@
       "url": "https://example.com",
       "transport": "http",
       "http": {
-        "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+        "endpoint": "https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server",
         "username": "mcp-agent",
         "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
       }
@@ -16,7 +16,7 @@
       "url": "https://staging.example.com",
       "transport": "http",
       "http": {
-        "endpoint": "https://staging.example.com/wp-json/mcp/mcp-adapter-default-server",
+        "endpoint": "https://staging.example.com/wp-json/mcp/abilities-mcp-adapter-default-server",
         "username": "mcp-agent",
         "password": "xxxx xxxx xxxx xxxx"
       }
@@ -35,7 +35,7 @@
       "url": "https://network.example.com",
       "transport": "http",
       "http": {
-        "endpoint": "https://network.example.com/wp-json/mcp/mcp-adapter-default-server",
+        "endpoint": "https://network.example.com/wp-json/mcp/abilities-mcp-adapter-default-server",
         "username": "mcp-agent",
         "passwordEnv": "WP_NETWORK_PASSWORD"
       },

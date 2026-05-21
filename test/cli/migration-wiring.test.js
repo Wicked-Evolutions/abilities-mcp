@@ -36,7 +36,7 @@ function legacyV1HttpConfig() {
         url: 'https://example.com',
         transport: 'http',
         http: {
-          endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+          endpoint: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           username: 'wp_editor',
           password: 'P@ssw0rd',
         },

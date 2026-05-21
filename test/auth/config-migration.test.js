@@ -23,7 +23,7 @@ describe('config-migration.migrateConfig', () => {
           label: 'My Site',
           url: 'https://example.com',
           transport: 'http',
-          http: { endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server', username: 'u', password: 'P' },
+          http: { endpoint: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server', username: 'u', password: 'P' },
         },
       },
     };
@@ -56,7 +56,7 @@ describe('config-migration.migrateConfig', () => {
         mysite: {
           url: 'https://example.com',
           transport: 'http',
-          http: { endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server', username: 'u', passwordEnv: 'WP_PW' },
+          http: { endpoint: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server', username: 'u', passwordEnv: 'WP_PW' },
         },
       },
     };

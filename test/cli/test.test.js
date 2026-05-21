@@ -30,7 +30,7 @@ describe('CLI test (ping + scope summary)', () => {
             access_token_ref: makeRef('abilities-mcp', 'mock/access'),
             refresh_token_ref: makeRef('abilities-mcp', 'mock/refresh'),
           }, extra.auth || {}),
-          mcp_resource: extra.mcp_resource || `${server.origin}/wp-json/mcp/mcp-adapter-default-server`,
+          mcp_resource: extra.mcp_resource || `${server.origin}/wp-json/mcp/abilities-mcp-adapter-default-server`,
         }),
       },
     });

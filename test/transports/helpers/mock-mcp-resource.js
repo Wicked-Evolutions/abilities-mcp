@@ -53,7 +53,7 @@ class MockMcpResource {
   }
 
   get origin() { return `http://127.0.0.1:${this._port}`; }
-  get endpoint() { return `${this.origin}/wp-json/mcp/mcp-adapter-default-server`; }
+  get endpoint() { return `${this.origin}/wp-json/mcp/abilities-mcp-adapter-default-server`; }
 
   _onRequest(req, res) {
     const chunks = [];

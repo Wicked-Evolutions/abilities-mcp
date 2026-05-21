@@ -31,7 +31,7 @@ describe('buildEnvConfig', () => {
     });
     assert.equal(
       config.sites.default.http.endpoint,
-      'https://example.com/wp-json/mcp/mcp-adapter-default-server'
+      'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server'
     );
   });
 
@@ -43,7 +43,7 @@ describe('buildEnvConfig', () => {
     });
     assert.equal(
       config.sites.default.http.endpoint,
-      'https://example.com/wp-json/mcp/mcp-adapter-default-server'
+      'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server'
     );
   });
 
@@ -55,7 +55,7 @@ describe('buildEnvConfig', () => {
     });
     assert.equal(
       config.sites.default.http.endpoint,
-      'https://example.com/wp/wp-json/mcp/mcp-adapter-default-server'
+      'https://example.com/wp/wp-json/mcp/abilities-mcp-adapter-default-server'
     );
   });
 
@@ -121,7 +121,7 @@ describe('buildEnvConfig', () => {
     assert.equal(config.sites.default.allowInsecure, true);
     assert.equal(
       config.sites.default.http.endpoint,
-      'http://localhost:8080/wp-json/mcp/mcp-adapter-default-server'
+      'http://localhost:8080/wp-json/mcp/abilities-mcp-adapter-default-server'
     );
   });
 

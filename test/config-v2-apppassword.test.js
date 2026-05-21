@@ -45,7 +45,7 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
           url: 'https://wickedevolutions.com',
           transport: 'http',
           http: {
-            endpoint: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'wicked_user',
             password_ref: makeRef(SECRET_SERVICE, 'wicked/apppassword'),
           },
@@ -92,7 +92,7 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         x: {
           url: 'https://x.example',
           transport: 'http',
-          http: { endpoint: 'https://x.example/wp-json/mcp/mcp-adapter-default-server', username: 'u' },
+          http: { endpoint: 'https://x.example/wp-json/mcp/abilities-mcp-adapter-default-server', username: 'u' },
           auth: { method: 'apppassword', password_ref: makeRef(SECRET_SERVICE, 'x/apppassword') },
         },
       },
@@ -108,7 +108,7 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         x: {
           url: 'https://x.example',
           transport: 'http',
-          http: { endpoint: 'https://x.example/wp-json/mcp/mcp-adapter-default-server', username: 'u' },
+          http: { endpoint: 'https://x.example/wp-json/mcp/abilities-mcp-adapter-default-server', username: 'u' },
           auth: { method: 'apppassword', username: 'u' },
         },
       },
@@ -164,7 +164,7 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
         x: {
           url: 'http://x.example',
           transport: 'http',
-          http: { endpoint: 'http://x.example/wp-json/mcp/mcp-adapter-default-server', username: 'u' },
+          http: { endpoint: 'http://x.example/wp-json/mcp/abilities-mcp-adapter-default-server', username: 'u' },
           auth: {
             method: 'apppassword',
             username: 'u',
@@ -184,7 +184,7 @@ describe('loadConfig — v2 apppassword site acceptance (Issue #26)', () => {
           url: 'https://legacy.example',
           transport: 'http',
           http: {
-            endpoint: 'https://legacy.example/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://legacy.example/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'u',
             password: 'pw',
           },

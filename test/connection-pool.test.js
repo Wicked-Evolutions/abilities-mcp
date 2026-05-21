@@ -26,7 +26,7 @@ function fakeDiscover() {
       authorization_endpoint: `${siteUrl}/oauth/authorize`,
     },
     asMetadataUrl: `${siteUrl}/.well-known/oauth-authorization-server`,
-    prMetadata: { resource: `${siteUrl}/wp-json/mcp/mcp-adapter-default-server` },
+    prMetadata: { resource: `${siteUrl}/wp-json/mcp/abilities-mcp-adapter-default-server` },
     prMetadataUrl: `${siteUrl}/.well-known/oauth-protected-resource`,
     probeResults: [],
   });
@@ -44,7 +44,7 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
       sites: {
         siteA: {
           url: 'https://example.com',
-          mcp_resource: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: {
             method: 'oauth',
             client_id: 'client-x',
@@ -68,7 +68,7 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
     const transport = await pool._createTransport('siteA', null);
     assert.ok(transport instanceof OAuthHttpTransport,
       `expected OAuthHttpTransport, got ${transport && transport.constructor && transport.constructor.name}`);
-    assert.equal(transport.endpoint, 'https://example.com/wp-json/mcp/mcp-adapter-default-server');
+    assert.equal(transport.endpoint, 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server');
   });
 
   it('routes App-Password sites to legacy HttpTransport unchanged (no regression)', async () => {
@@ -85,7 +85,7 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
           url: 'https://siteB.com',
           transport: 'http',
           http: {
-            endpoint: 'https://siteB.com/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://siteB.com/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'wp_user',
             password_ref: makeRef(SECRET_SERVICE, 'siteB/apppassword'),
           },
@@ -104,7 +104,7 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
     assert.ok(transport instanceof HttpTransport,
       `expected HttpTransport, got ${transport && transport.constructor && transport.constructor.name}`);
     assert.ok(!(transport instanceof OAuthHttpTransport));
-    assert.equal(transport.endpoint, 'https://siteB.com/wp-json/mcp/mcp-adapter-default-server');
+    assert.equal(transport.endpoint, 'https://siteB.com/wp-json/mcp/abilities-mcp-adapter-default-server');
     assert.equal(transport.username, 'wp_user');
     assert.equal(transport.password, 'pw');
   });
@@ -118,7 +118,7 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
           url: 'https://v1.example.com',
           transport: 'http',
           http: {
-            endpoint: 'https://v1.example.com/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://v1.example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'v1_user',
             password: 'v1_pw',
           },
@@ -201,7 +201,7 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
       sites: {
         siteA: {
           url: 'https://example.com',
-          mcp_resource: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: {
             method: 'oauth',
             client_id: 'x',
@@ -233,7 +233,7 @@ describe('ConnectionPool — _findExistingHttpTransport handles both transport v
       sites: {
         siteA: {
           url: 'https://example.com',
-          mcp_resource: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: { method: 'oauth', client_id: 'x',
             access_token_ref: 'keychain://abilities-mcp/siteA/access',
             refresh_token_ref: 'keychain://abilities-mcp/siteA/refresh' },
@@ -242,7 +242,7 @@ describe('ConnectionPool — _findExistingHttpTransport handles both transport v
       },
     };
     const pool = new ConnectionPool(config, () => {});
-    pool.transports.set('siteA', { endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server' });
+    pool.transports.set('siteA', { endpoint: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server' });
     const found = pool._findExistingHttpTransport('siteA');
     assert.ok(found, 'expected to find existing transport for OAuth site');
     assert.equal(found.key, 'siteA');
@@ -261,7 +261,7 @@ describe('ConnectionPool — _findExistingHttpTransport handles both transport v
       sites: {
         wicked: {
           url: 'https://wickedevolutions.com',
-          mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: { method: 'oauth', client_id: 'x',
             access_token_ref: 'keychain://abilities-mcp/w/access',
             refresh_token_ref: 'keychain://abilities-mcp/w/refresh' },
@@ -275,7 +275,7 @@ describe('ConnectionPool — _findExistingHttpTransport handles both transport v
     };
     const pool = new ConnectionPool(config, () => {});
     // Seed cache with the network-root transport (parent / .main lookup path).
-    const networkRootTransport = { endpoint: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server' };
+    const networkRootTransport = { endpoint: 'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server' };
     pool.transports.set('wicked', networkRootTransport);
 
     // Before #48: this returned the network-root transport. After #48: returns null,
@@ -335,7 +335,7 @@ describe('ConnectionPool — multi-site v2 acceptance (Issue #26)', () => {
       sites: {
         helena: {
           url: 'https://helenawillow.com',
-          mcp_resource: 'https://helenawillow.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'https://helenawillow.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: {
             method: 'oauth',
             client_id: 'client-h',
@@ -350,7 +350,7 @@ describe('ConnectionPool — multi-site v2 acceptance (Issue #26)', () => {
           url: 'https://wickedevolutions.com',
           transport: 'http',
           http: {
-            endpoint: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'wicked_user',
             password_ref: makeRef(SECRET_SERVICE, 'wicked/apppassword'),
           },
@@ -365,7 +365,7 @@ describe('ConnectionPool — multi-site v2 acceptance (Issue #26)', () => {
           url: 'https://thinknicenow.com',
           transport: 'http',
           http: {
-            endpoint: 'https://thinknicenow.com/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://thinknicenow.com/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'tnn_user',
             password_ref: makeRef(SECRET_SERVICE, 'tnn/apppassword'),
           },
@@ -399,7 +399,7 @@ describe('ConnectionPool — multi-site v2 acceptance (Issue #26)', () => {
 
     const helenaT = await pool._createTransport('helena', null);
     assert.ok(helenaT instanceof OAuthHttpTransport, 'helena should route to OAuthHttpTransport');
-    assert.equal(helenaT.endpoint, 'https://helenawillow.com/wp-json/mcp/mcp-adapter-default-server');
+    assert.equal(helenaT.endpoint, 'https://helenawillow.com/wp-json/mcp/abilities-mcp-adapter-default-server');
 
     const wickedT = await pool._createTransport('wicked', null);
     assert.ok(wickedT instanceof HttpTransport, 'wicked should route to HttpTransport');
@@ -432,7 +432,7 @@ describe('ConnectionPool — multi-site v2 acceptance (Issue #26)', () => {
           url: 'https://broken.example',
           transport: 'http',
           http: {
-            endpoint: 'https://broken.example/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://broken.example/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'u',
           },
           auth: { method: 'apppassword', username: 'u' },
@@ -472,7 +472,7 @@ describe('ConnectionPool — OAuth subsite routing (Issue #48)', () => {
           sites: {
             wickedevolutions: {
               url: 'https://wickedevolutions.com',
-              mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+              mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server',
               auth: {
                 method: 'oauth',
                 client_id: 'client-x',
@@ -507,7 +507,7 @@ describe('ConnectionPool — OAuth subsite routing (Issue #48)', () => {
     assert.ok(transport instanceof OAuthHttpTransport);
     assert.equal(
       transport.endpoint,
-      'https://community.wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+      'https://community.wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server',
       'OAuth subsite must POST to the subsite host so multisite routes by URL — ' +
       'this was the GPT 5.5 review finding (all subsites returned 106 main-site posts)'
     );
@@ -537,7 +537,7 @@ describe('ConnectionPool — OAuth subsite routing (Issue #48)', () => {
     assert.ok(transport instanceof OAuthHttpTransport);
     assert.equal(
       transport.endpoint,
-      'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+      'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server',
       'no subsite suffix → siteConfig.mcp_resource (network root) is correct'
     );
     assert.equal(transport.subsiteUrl, null,
@@ -574,7 +574,7 @@ describe('ConnectionPool — connectDefault per-site auth-init isolation (#76)',
   function fakeOAuthSite() {
     return {
       url: 'https://example.com',
-      mcp_resource: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+      mcp_resource: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
       auth: {
         method: 'oauth',
         client_id: 'c',
@@ -592,7 +592,7 @@ describe('ConnectionPool — connectDefault per-site auth-init isolation (#76)',
       if (!outcome) throw new Error(`unconfigured outcome for ${key}`);
       if (outcome.throwAtCreate) throw outcome.throwAtCreate;
       const transport = {
-        endpoint: `https://${key}.example.com/wp-json/mcp/mcp-adapter-default-server`,
+        endpoint: `https://${key}.example.com/wp-json/mcp/abilities-mcp-adapter-default-server`,
         onMessage: null,
         connect: async () => {
           if (outcome.throwAtConnect) throw outcome.throwAtConnect;

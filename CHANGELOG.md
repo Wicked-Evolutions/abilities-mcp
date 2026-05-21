@@ -4,6 +4,26 @@ All notable changes to Abilities MCP are documented here.
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-05-21
+
+### Changed
+
+- **Default MCP server path updated to `abilities-mcp-adapter-default-server` (Issue [#95](https://github.com/Wicked-Evolutions/abilities-mcp/issues/95); paired with [abilities-mcp-adapter#134](https://github.com/Wicked-Evolutions/abilities-mcp-adapter/issues/134)).** Adapter v1.4.9 renames its default MCP server name from `mcp-adapter-default-server` to `abilities-mcp-adapter-default-server` so it no longer collides with the official `wordpress/mcp-adapter` library — which FluentKit bundles inside `fluent-toolkit` and which is also available as a standalone plugin. When both adapters register a server with the same name on the same site, WordPress's server registry rejects the second one first-creator-wins, so AI clients hitting the legacy URL on a FluentKit-active site reach FluentKit's handler instead of ours. The bridge now derives the new path everywhere it previously hardcoded the old name:
+  - `lib/config.js` — env-var `.mcpb` install path (`buildEnvConfig`, line 161); doc-comment example (line 129); `--host`/`--path` SSH default (`mcpServer`, line 425). Single-site `.mcpb` installs auto-migrate on bridge restart because the env-var-derived endpoint is rebuilt each boot from `ABILITIES_MCP_URL` plus the new default suffix — no operator action required.
+  - `lib/cli/config-store.js` — `add-site` / `seedFromEnvIfMissing` endpoint builder (line 267).
+  - `lib/connection-pool.js` — SSH `mcpServer` fallback default (line 448).
+  - `lib/transports/ssh-transport.js` — `SshTransport` constructor default (line 40).
+
+### Added
+
+- **Stale-endpoint pre-flight in `abilities-mcp test <site_id>` (Option B from issue [#95](https://github.com/Wicked-Evolutions/abilities-mcp/issues/95)).** When an existing operator upgrades the bridge to v1.6.5 but their `wp-sites.json` still carries the old server name on `mcp_resource` / `http.endpoint` / `auth.mcp_resource`, the bridge does NOT auto-rewrite the file. Instead, `test <site_id>` now runs a quick check before the OAuth bearer / probe flow and — if the stored URL still points at the old name — exits with a plain-language message giving the exact file path, the exact `from:` and `to:` URLs for each stale field, and the follow-up command to re-run after editing. Operators update the JSON file deliberately; the bridge never modifies stored config behind their back. Detection is implemented as a small pure helper (`detectLegacyEndpoint(site)`) in `lib/cli/config-store.js` so it stays testable and reusable. Single-site `.mcpb` installs and `--host`/`--path` SSH configs do not need this path — they derive the endpoint from the new default and auto-migrate on bridge restart. The migration path was chosen over a more invasive `migrate-endpoint <site_id>` rewrite subcommand because (1) it is the simplest of the three options the issue proposed, (2) no automated rewrite removes any possibility of silently mutating operator-owned configuration, (3) the change itself is one string in a small JSON file — hand-editing matches the friction of the change, and (4) it avoids permanently expanding the CLI surface for a one-time migration concern.
+
+### Operator notes
+
+- **`.mcpb` (Claude Desktop) users:** restart Claude Desktop after upgrading. The bridge rebuilds the endpoint from `ABILITIES_MCP_URL` on every boot using the new default; nothing to edit.
+- **`wp-sites.json` users (CLI / multi-site):** run `abilities-mcp test <site_id>` after upgrading. If your config still points at the old server name, you will see a migration message naming the exact field(s) and the new URL to write; otherwise the test proceeds as before.
+- **Coordinated release:** ships paired with `abilities-mcp-adapter` v1.4.9. The adapter zip is held until this bridge release is published so the operator-impact window between the two stays minimal. Sites running FluentKit's bundle continue to reach FluentKit's server at the legacy URL during the window (no breakage); sites without any other adapter need both the upgraded bridge and the v1.4.9 adapter installed before AI clients can reach our server again.
+
 ## [1.6.4] - 2026-05-17
 
 ### Added

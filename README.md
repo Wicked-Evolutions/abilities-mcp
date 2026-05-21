@@ -167,7 +167,7 @@ In your client's MCP config:
 }
 ```
 
-The endpoint is auto-derived as `<URL>/wp-json/mcp/mcp-adapter-default-server`. Single-site, Application Password only — for OAuth or multi-site, use Path 1 or Path 3.
+The endpoint is auto-derived as `<URL>/wp-json/mcp/abilities-mcp-adapter-default-server`. Single-site, Application Password only — for OAuth or multi-site, use Path 1 or Path 3.
 
 For `claude mcp add` users:
 
@@ -261,7 +261,7 @@ Bare `abilities-mcp` (no subcommand) starts the MCP STDIO server — the mode ev
       "url": "https://example.com",
       "transport": "http",
       "http": {
-        "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+        "endpoint": "https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server",
         "username": "mcp-agent",
         "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
       }
@@ -315,7 +315,7 @@ For App Password multisite (Path 3 hand-curated config), add a `multisite` objec
     "label": "My Network",
     "transport": "http",
     "http": {
-      "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+      "endpoint": "https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server",
       "username": "mcp-agent",
       "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
     },
@@ -341,7 +341,7 @@ Runs a shell command at startup and uses stdout as the password. Works with any 
 ```json
 {
   "http": {
-    "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+    "endpoint": "https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server",
     "username": "mcp-agent",
     "passwordCommand": "security find-generic-password -a mcp-agent -s example.com -w"
   }
@@ -381,7 +381,7 @@ Reads the password from an environment variable. Useful in CI/CD, Docker, or whe
 ```json
 {
   "http": {
-    "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server",
+    "endpoint": "https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server",
     "username": "mcp-agent",
     "passwordEnv": "WP_MCP_PASSWORD"
   }

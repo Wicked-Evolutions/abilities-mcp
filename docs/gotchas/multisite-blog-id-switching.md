@@ -20,7 +20,7 @@ Each subsite gets its own endpoint URL. The bridge's `resolveSiteKey()` in `conf
   "network": {
     "transport": "http",
     "http": {
-      "endpoint": "https://example.com/wp-json/mcp/mcp-adapter-default-server"
+      "endpoint": "https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server"
     },
     "multisite": {
       "main": "https://example.com/",

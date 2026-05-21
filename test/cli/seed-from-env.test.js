@@ -53,7 +53,7 @@ describe('seedFromEnvIfMissing — happy path (Issue #34)', () => {
     assert.equal(site.url, 'https://wickedevolutions.com');
     assert.equal(site.label, 'wickedevolutions.com');
     assert.equal(site.transport, 'http');
-    assert.equal(site.http.endpoint, 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server');
+    assert.equal(site.http.endpoint, 'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server');
     assert.equal(site.http.username, 'wicked');
     assert.equal(site.http.password_ref, `keychain://${SECRET_SERVICE}/wickedevolutions/apppassword`);
     assert.equal(site.auth.method, 'apppassword');

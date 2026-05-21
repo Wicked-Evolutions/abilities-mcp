@@ -26,7 +26,7 @@ const {
  */
 
 const SITE_URL = 'https://network.example.com';
-const ENDPOINT = 'https://network.example.com/wp-json/mcp/mcp-adapter-default-server';
+const ENDPOINT = 'https://network.example.com/wp-json/mcp/abilities-mcp-adapter-default-server';
 const ACCESS_TOKEN = 'AT-test';
 
 function makeSubsite(i) {
@@ -259,7 +259,7 @@ describe('probeMultisite — pagination (Issue #49)', () => {
     // tool surface.
     const { request } = makePaginatedRequest(makeNetwork(4));
     const r = await probeMultisite({
-      endpoint: 'https://sub2.network.example.com/wp-json/mcp/mcp-adapter-default-server',
+      endpoint: 'https://sub2.network.example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
       accessToken: ACCESS_TOKEN,
       siteUrl: 'https://sub2.network.example.com',
       deps: { request },

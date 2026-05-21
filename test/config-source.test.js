@@ -45,7 +45,7 @@ const APPPASSWORD_HTTP_SITE = {
       url: 'https://example.com',
       transport: 'http',
       http: {
-        endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+        endpoint: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
         username: 'wp_user',
         password: 'pw',
       },
@@ -152,7 +152,7 @@ describe('formatConfigSourceLine — per-source output format', () => {
       sites: {
         default: {
           transport: 'http',
-          http: { endpoint: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server', username: 'wicked', password: 'pw' },
+          http: { endpoint: 'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server', username: 'wicked', password: 'pw' },
         },
       },
     });
