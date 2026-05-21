@@ -4,6 +4,17 @@ All notable changes to Abilities MCP are documented here.
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-05-21
+
+### Added
+
+- **`mcp-adapter-discover-abilities` now advertises the six adapter-side filter / pagination parameters to AI clients (Issue [#97](https://github.com/Wicked-Evolutions/abilities-mcp/issues/97); closes adapter [#128](https://github.com/Wicked-Evolutions/abilities-mcp-adapter/issues/128)).** The adapter has accepted `category`, `annotation`, `search`, `compact`, `limit`, and `offset` on its `mcp-adapter/discover-abilities` ability since v1.2.0, and the bridge router has been forwarding them unchanged. The remaining gap was the `tools/list` projection: when an upstream layer projects an empty `inputSchema`, the bridge's defensive sanitizer normalizes it to `{ type: 'object' }`, after which AI clients have no way to know the optional params exist. v1.6.6 adds a small, additive schema overlay in `lib/tool-injector.js` (`applyAdapterToolSchemaOverlays`) that asserts the six params on the projected `inputSchema` for the `mcp-adapter-discover-abilities` tool — keyed by tool name, merged additively, adapter-wins on collision so a future adapter rename does not get clobbered. The overlay is a thin pass-through: the bridge only states what an AI client may pass; the adapter remains authoritative on runtime semantics. Operators see no router or forwarding change. Mirror of `src/Abilities/DiscoverAbilitiesAbility.php` register() input_schema; regression-guarded by 8 new tests in `test/tool-injector.test.js`.
+
+### Notes
+
+- **Version reservation.** v1.6.5 is reserved for the open `feat/v1.6.5-endpoint-rename-migration` branch (PR [#96](https://github.com/Wicked-Evolutions/abilities-mcp/pull/96)). v1.6.6 ships independently from main; whichever PR merges first publishes its version, and the other rebases.
+- Per Issue #97 the live forwarding path for `compact`, `limit`, and `category` was J-verified on dev2.helenawillow.com 2026-05-21; the remaining three (`annotation`, `search`, `offset`) ride the same `extractSiteParam`-only stripping in the router (rest-spread destructure of `site`), so they reach the adapter unchanged through the same path.
+
 ## [1.6.4] - 2026-05-17
 
 ### Added
