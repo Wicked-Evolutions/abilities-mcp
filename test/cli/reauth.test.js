@@ -121,7 +121,7 @@ describe('CLI reauth — scope mutation flags (Issue #50)', () => {
             : String(this.opts.scope || '').split(/[,\s]+/).filter(Boolean),
           clientId: 'client-stub',
           asMetadata: { issuer: this.opts.siteUrl },
-          prMetadata: { resource: `${this.opts.siteUrl}/wp-json/mcp/mcp-adapter-default-server` },
+          prMetadata: { resource: `${this.opts.siteUrl}/wp-json/mcp/abilities-mcp-adapter-default-server` },
           capabilityPin: {
             firstSeenAt: new Date('2026-01-01T00:00:00Z').toISOString(),
             lastConfirmedAt: new Date().toISOString(),
@@ -138,7 +138,7 @@ describe('CLI reauth — scope mutation flags (Issue #50)', () => {
       sites: {
         helena: {
           url: 'https://helenawillow.com',
-          mcp_resource: 'https://helenawillow.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'https://helenawillow.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: {
             method: 'oauth',
             client_id: 'client-test',

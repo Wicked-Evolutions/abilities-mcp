@@ -57,7 +57,7 @@ describe('discovery-client.discover (e2e against MockAuthServer)', () => {
     const result = await discover(server.siteUrl, { allowInsecure: true });
     assert.equal(typeof result.asMetadata.issuer, 'string');
     assert.equal(result.asMetadata.token_endpoint, `${server.origin}/oauth/token`);
-    assert.equal(result.prMetadata.resource, `${server.origin}/wp-json/mcp/mcp-adapter-default-server`);
+    assert.equal(result.prMetadata.resource, `${server.origin}/wp-json/mcp/abilities-mcp-adapter-default-server`);
   });
 
   it('refuses HTTP discovery for non-loopback hosts (HTTPS-only per H.2.3)', async () => {

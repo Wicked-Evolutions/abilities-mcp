@@ -168,7 +168,7 @@ class MockAuthServer {
   }
   _prMetadata() {
     return {
-      resource: `${this.origin}/wp-json/mcp/mcp-adapter-default-server`,
+      resource: `${this.origin}/wp-json/mcp/abilities-mcp-adapter-default-server`,
       authorization_servers: [this.siteUrl],
       scopes_supported: ['abilities:read', 'abilities:write'],
       bearer_methods_supported: ['header'],

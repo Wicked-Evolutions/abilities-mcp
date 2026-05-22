@@ -46,7 +46,7 @@ describe('loadConfig — async surface (Issue #5)', () => {
           url: 'https://example.com',
           transport: 'http',
           http: {
-            endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'u',
             password: 'pw',
           },

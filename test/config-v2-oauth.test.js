@@ -37,7 +37,7 @@ describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', ()
       sites: {
         siteA: {
           url: 'https://example.com',
-          mcp_resource: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: {
             method: 'oauth',
             client_id: 'client-x',
@@ -80,7 +80,7 @@ describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', ()
       sites: {
         siteA: {
           url: 'http://example.com',
-          mcp_resource: 'http://example.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'http://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: {
             method: 'oauth',
             client_id: 'x',
@@ -102,7 +102,7 @@ describe('loadConfig — v2 OAuth site acceptance (Issue #17 gating change)', ()
           url: 'https://example.com',
           transport: 'http',
           http: {
-            endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server',
+            endpoint: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
             username: 'wp_user',
             password: 'pw',
           },
@@ -130,7 +130,7 @@ describe('resolveSiteKey — multisite endpoint derivation (Issue #48)', () => {
       sites: {
         wickedevolutions: {
           url: 'https://wickedevolutions.com',
-          mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+          mcp_resource: 'https://wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server',
           auth: {
             method: 'oauth',
             client_id: 'client-x',
@@ -155,7 +155,7 @@ describe('resolveSiteKey — multisite endpoint derivation (Issue #48)', () => {
     assert.equal(r.subsiteUrl, 'https://community.wickedevolutions.com');
     assert.equal(
       r.resolvedEndpoint,
-      'https://community.wickedevolutions.com/wp-json/mcp/mcp-adapter-default-server',
+      'https://community.wickedevolutions.com/wp-json/mcp/abilities-mcp-adapter-default-server',
       'subsite endpoint must use the subsite host so multisite routes by URL'
     );
   });
@@ -190,7 +190,7 @@ describe('resolveSiteKey — multisite endpoint derivation (Issue #48)', () => {
         wp: {
           url: 'https://example.com',
           transport: 'http',
-          http: { endpoint: 'https://example.com/wp-json/mcp/mcp-adapter-default-server' },
+          http: { endpoint: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server' },
           multisite: { sub: 'https://sub.example.com' },
         },
       },
@@ -198,7 +198,7 @@ describe('resolveSiteKey — multisite endpoint derivation (Issue #48)', () => {
     const r = resolveSiteKey(config, 'wp.sub');
     assert.equal(
       r.resolvedEndpoint,
-      'https://sub.example.com/wp-json/mcp/mcp-adapter-default-server'
+      'https://sub.example.com/wp-json/mcp/abilities-mcp-adapter-default-server'
     );
   });
 });

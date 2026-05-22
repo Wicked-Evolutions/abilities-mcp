@@ -88,7 +88,7 @@ function startMockSite(tmp) {
       }
       if (u.pathname === '/.well-known/oauth-protected-resource') {
         return jsonOk(res, {
-          resource: `${origin}/wp-json/mcp/mcp-adapter-default-server`,
+          resource: `${origin}/wp-json/mcp/abilities-mcp-adapter-default-server`,
           authorization_servers: [origin],
         });
       }
@@ -118,7 +118,7 @@ async function main() {
       'wicked-community': {
         url: origin,
         label: 'wicked-community (synthetic)',
-        mcp_resource: `${origin}/wp-json/mcp/mcp-adapter-default-server`,
+        mcp_resource: `${origin}/wp-json/mcp/abilities-mcp-adapter-default-server`,
         auth: {
           method: 'oauth',
           client_id: 'synthetic-client',
