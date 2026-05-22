@@ -2,7 +2,7 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { ToolCatalog } = require('../lib/tool-catalog');
+const { ToolCatalog, extractCategoryFromName } = require('../lib/tool-catalog');
 
 function makeCatalog(opts = {}) {
   const config = {
@@ -195,5 +195,15 @@ describe('ToolCatalog', () => {
     const catNames = summary.map(c => c.name);
     assert.ok(catNames.includes('fluent-crm'));
     assert.ok(catNames.includes('fluent-community'));
+  });
+});
+
+describe('extractCategoryFromName — surecart-ecommerce compound prefix', () => {
+  it('categorizes surecart-ecommerce-* as "surecart-ecommerce"', () => {
+    assert.equal(extractCategoryFromName('surecart-ecommerce-get-store'), 'surecart-ecommerce');
+  });
+
+  it('still categorizes plain surecart-* as "surecart"', () => {
+    assert.equal(extractCategoryFromName('surecart-get-order'), 'surecart');
   });
 });

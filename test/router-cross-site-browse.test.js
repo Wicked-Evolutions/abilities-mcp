@@ -107,10 +107,11 @@ describe('McpRouter — wp_browse_tools cross-site (C1)', () => {
     assert.match(text, /scoped to "helenawillow"/i);
     assert.match(text, /browse-only/i);
     assert.match(text, /fluent-crm \(3 tools\)/);
-    // `surecart-ecommerce-get-store` → category `surecart` under the shared
-    // prefix logic (surecart-ecommerce is not a registered compound prefix);
-    // this matches how the default-site catalog would categorize it too.
-    assert.match(text, /surecart \(1 tools\)/);
+    // `surecart-ecommerce-get-store` → category `surecart-ecommerce` (the
+    // compound prefix is registered, so it no longer folds into `surecart`).
+    // This aligns the bridge browse summary with the adapter's registered
+    // category and its discover histogram.
+    assert.match(text, /surecart-ecommerce \(1 tools\)/);
     assert.match(text, /Total: 5 tools in 3 categories on "helenawillow"/);
     // Points cross-site execution at the adapter meta-tools.
     assert.match(text, /mcp-adapter-discover-abilities \{ site: "helenawillow"/);
