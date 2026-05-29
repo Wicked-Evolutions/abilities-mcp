@@ -5,3 +5,6 @@ wp-sites*.json
 .DS_Store
 *.mcpb
 dist-mcpb/
+
+# Claude Code agent worktrees / local metadata (never committed)
+.claude/
