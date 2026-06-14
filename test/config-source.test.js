@@ -102,7 +102,11 @@ describe('loadConfig — _configSource discriminant per branch (Issue #32)', () 
     try {
       const scriptAdjacent = path.resolve(__dirname, '..', 'wp-sites.json');
       if (fs.existsSync(scriptAdjacent)) return;
-      const cfg = await loadConfig({});
+      // Inject an unavailable secret store so seed-from-env (#34) is skipped
+      // and the env-var branch is reached deterministically — otherwise a host
+      // with a keychain (e.g. Windows Credential Manager) seeds a home-dir
+      // config and loadConfig returns 'home-dir' instead of 'env-var'.
+      const cfg = await loadConfig({}, { secretStore: { isAvailable: async () => false } });
       assert.equal(cfg._configSource, 'env-var');
       assert.equal(cfg._configSourceLabel, 'wickedevolutions.com');
     } finally {
