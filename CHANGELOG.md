@@ -4,6 +4,24 @@ All notable changes to Abilities MCP are documented here.
 
 ## [Unreleased]
 
+## [1.6.6] - 2026-06-14
+
+Attach reliability. Two bugs that prevented an AI client from attaching to the bridge, plus the route-source hardening that surfaced alongside them.
+
+### Fixed
+
+- **Client attach no longer loops forever when a configured MCP route is absent (Issue [#103](https://github.com/Wicked-Evolutions/abilities-mcp/issues/103)).** When a site's persisted `mcp_resource` route returns HTTP `404 rest_no_route` (the route does not exist on the server — e.g. the server's adapter still advertises the older default name), both HTTP transports treated every 404 as "session expired" and re-ran `performHandshake()`, which re-POSTed `initialize`, got the same 404, and recursed without bound — the client never received an `InitializeResult`. Fixed in three parts: (1) a `404` carrying WordPress's `rest_no_route` code is surfaced as a terminal `mcp_route_absent` error (shared helper `lib/transports/rest-error.js`) so the router's per-site fallback (#87) / degraded convergence (#76) engages instead of recovering; `HttpTransport` additionally re-throws it ahead of its network-retry branch so it is not retried. (2) A new `_inHandshake` guard on both transports bounds session recovery to exactly one re-handshake for *any* persistent 404 — `performHandshake()`'s own `initialize`/`initialized` POSTs can no longer re-enter the recovery branch. (3) Discovery metadata caching no longer pins a null protected-resource for the process lifetime.
+- **Client attach no longer hangs when all sites fail at boot (Issue [#102](https://github.com/Wicked-Evolutions/abilities-mcp/issues/102), part a).** When every configured site failed to connect at boot, the bridge entered degraded mode but `drainEarlyQueue()` forwarded the early-queued `initialize` to a null default transport — silently dropping it, so the client hung to its 60s `initialize` deadline and detached. `drainEarlyQueue()` now re-dispatches queued messages through `handleClientMessage()` in degraded boot, so a queued `initialize` reaches the existing degraded synthesis path (a locally-synthesized `InitializeResult`) and the client attaches in degraded mode. The connected path is unchanged. (Part b — a genuinely *hanging* site that delays degraded mode past the deadline via the serial connect walk — is tracked separately in [#108](https://github.com/Wicked-Evolutions/abilities-mcp/issues/108).)
+
+### Changed
+
+- **OAuth transport prefers the live-discovered protected-resource over a stale persisted `mcp_resource` (Issue [#103](https://github.com/Wicked-Evolutions/abilities-mcp/issues/103), Component B).** When `.well-known/oauth-protected-resource` advertises a `resource` that differs from the persisted `mcp_resource` (e.g. the bridge config carries the v1.6.5 default route name but the site's adapter still advertises the older name), the bridge connects via the live-discovered resource (RFC 9728 authoritative) and logs an actionable `reauth` hint. Operator-configured multisite subsite endpoints (`resolvedEndpoint`) still take precedence.
+
+### Known follow-ups
+
+- [#108](https://github.com/Wicked-Evolutions/abilities-mcp/issues/108) — bounded boot / lazy connect so a hanging site can't delay degraded mode (#102 part b).
+- [#106](https://github.com/Wicked-Evolutions/abilities-mcp/issues/106) / [#107](https://github.com/Wicked-Evolutions/abilities-mcp/issues/107) — complete #103 Component B's route-source edge cases (dedup keying; multisite subsite path).
+
 ## [1.6.5] - 2026-05-21
 
 ### Changed

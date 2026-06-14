@@ -413,3 +413,116 @@ describe('McpRouter — degraded mode (#76)', () => {
     assert.doesNotMatch(resp.error.message, /siteA/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #102(a) — deterministic early-queue drop in degraded boot
+// ---------------------------------------------------------------------------
+
+describe('McpRouter — drainEarlyQueue in degraded boot (#102a)', () => {
+  // Shared factory: degraded router with no defaultTransport, capturing sent lines.
+  function makeDeградedRouter() {
+    const sent = [];
+    const router = new McpRouter({
+      config: { defaultSite: 'x', sites: { x: {} } },
+      siteKeys: ['x'],
+      isMultiSite: false,
+      pool: { setHandshakeCache() {} },
+      catalog: { isEnabled: () => false, cacheTools() {}, getFilteredTools: () => [] },
+      sendToClient: (s) => sent.push(s),
+      log: () => {},
+    });
+    router.enterDegradedMode([{ siteId: 'x', reason: 'connect failed' }]);
+    // defaultTransport intentionally left null (degraded path)
+    return { router, sent };
+  }
+
+  it('queued initialize in degraded drain emits valid InitializeResult (not dropped)', () => {
+    const { router, sent } = makeDeградedRouter();
+    const initLine = JSON.stringify({
+      jsonrpc: '2.0', id: 99, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {} },
+    });
+    router.earlyQueue.push(initLine);
+    router.drainEarlyQueue();
+
+    assert.equal(sent.length, 1, 'initialize must not be dropped — exactly one response emitted');
+    const resp = JSON.parse(sent[0]);
+    assert.equal(resp.id, 99, 'response id echoes the request id');
+    assert.ok(resp.result, 'response carries result, not error');
+    assert.equal(typeof resp.result.protocolVersion, 'string', 'protocolVersion present');
+    assert.equal(resp.result.protocolVersion, '2025-06-18', 'echoes client protocolVersion');
+    assert.equal(typeof resp.result.capabilities, 'object', 'capabilities present');
+    assert.equal(typeof resp.result.serverInfo, 'object', 'serverInfo present');
+    assert.equal(typeof resp.result.serverInfo.name, 'string', 'serverInfo.name present');
+    assert.ok(!resp.error, 'no error field — client connect completes, not hangs');
+  });
+
+  it('queued initialized notification in degraded drain is swallowed without throwing or emitting error', () => {
+    const { router, sent } = makeDeградedRouter();
+    // First push initialize so cachedInitRequest is set (initialized handler calls pool.setHandshakeCache)
+    router.earlyQueue.push(JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {} },
+    }));
+    router.earlyQueue.push(JSON.stringify({
+      jsonrpc: '2.0', method: 'initialized',
+    }));
+    // Should not throw
+    assert.doesNotThrow(() => router.drainEarlyQueue());
+    // initialize → 1 response; initialized → no response (swallowed)
+    const errorResponses = sent.filter((s) => {
+      try { return JSON.parse(s).error !== undefined; } catch { return false; }
+    });
+    assert.equal(errorResponses.length, 0, 'no error emitted for initialized notification in degraded drain');
+  });
+
+  it('queued tools/list in degraded drain emits bridge-only tools list', () => {
+    const { router, sent } = makeDeградedRouter();
+    router.earlyQueue.push(JSON.stringify({
+      jsonrpc: '2.0', id: 7, method: 'tools/list',
+    }));
+    router.drainEarlyQueue();
+
+    assert.equal(sent.length, 1);
+    const resp = JSON.parse(sent[0]);
+    assert.ok(resp.result, 'tools/list returns result, not error');
+    assert.ok(Array.isArray(resp.result.tools), 'result.tools is an array');
+    const names = resp.result.tools.map((t) => t.name).sort();
+    assert.deepEqual(names, ['wp_bridge_health', 'wp_browse_tools', 'wp_load_tools'],
+      'degraded drain tools/list = bridge tools only');
+  });
+
+  it('connected path unchanged — drainEarlyQueue with defaultTransport forwards via send, not handleClientMessage', () => {
+    const sent = [];
+    const transportSends = [];
+    const router = new McpRouter({
+      config: { defaultSite: 'x', sites: { x: {} } },
+      siteKeys: ['x'],
+      isMultiSite: false,
+      pool: { setHandshakeCache() {} },
+      catalog: { isEnabled: () => false, cacheTools() {}, getFilteredTools: () => [] },
+      sendToClient: (s) => sent.push(s),
+      log: () => {},
+    });
+    // Connected: defaultTransport present, not degraded
+    router.setDefaultTransport({ send: (l) => transportSends.push(l) });
+
+    const line1 = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
+    const line2 = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    router.earlyQueue.push(line1);
+    router.earlyQueue.push(line2);
+    router.drainEarlyQueue();
+
+    assert.deepEqual(transportSends, [line1, line2],
+      'connected path: both lines forwarded byte-identical via defaultTransport.send');
+    assert.equal(sent.length, 0,
+      'connected path: sendToClient NOT called — handleClientMessage bypassed');
+  });
+
+  it('non-JSON early-queued line in degraded drain is skipped without throwing', () => {
+    const { router, sent } = makeDeградedRouter();
+    router.earlyQueue.push('not-valid-json{{{');
+    assert.doesNotThrow(() => router.drainEarlyQueue());
+    assert.equal(sent.length, 0, 'non-JSON line skipped silently');
+  });
+});
