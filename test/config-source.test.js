@@ -222,6 +222,14 @@ describe('tildify', () => {
     assert.equal(tildify(home), '~');
   });
 
+  it('replaces leading $HOME using the platform separator (win32 backslash)', () => {
+    const home = os.homedir();
+    assert.equal(
+      tildify(home + path.sep + 'foo' + path.sep + 'bar'),
+      '~' + path.sep + 'foo' + path.sep + 'bar'
+    );
+  });
+
   it('leaves paths outside $HOME untouched', () => {
     assert.equal(tildify('/tmp/foo'), '/tmp/foo');
     assert.equal(tildify('/etc/passwd'), '/etc/passwd');
