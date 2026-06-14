@@ -31,7 +31,7 @@
     "url": "https://github.com/Wicked-Evolutions/abilities-mcp.git"
   },
   "scripts": {
-    "test": "node --test test/*.test.js test/auth/*.test.js test/cli/*.test.js test/transports/*.test.js",
+    "test": "node scripts/run-tests.js",
     "validate:mcpb": "npx --yes @anthropic-ai/mcpb validate manifest.json",
     "pack:mcpb": "node scripts/pack-mcpb.js",
     "verify:pack-isolation": "node scripts/verify-pack-isolation.js"
