@@ -8,3 +8,7 @@ dist-mcpb/
 
 # Claude Code agent worktrees / local metadata (never committed)
 .claude/
+
+# IJFW local agent tooling / metadata (never committed; matches at any depth)
+.ijfw/
+ijfw/

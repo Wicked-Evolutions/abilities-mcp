@@ -10,6 +10,7 @@ const { makeRef } = require('../../lib/auth/secret-store');
 const { AUTH_STATUS } = require('../../lib/auth/events');
 const { MockAuthServer } = require('../auth/helpers/mock-auth-server');
 const { MockMcpResource } = require('./helpers/mock-mcp-resource');
+const http = require('node:http');
 
 /**
  * OAuthHttpTransport — runtime bearer + refresh on 401 (Issue #17).
@@ -376,6 +377,126 @@ describe('OAuthHttpTransport — multisite subsite header (Issue #48)', () => {
       await t.shutdown();
     } finally {
       await server.stop(); await resource.stop();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #103 — route-absent 404 must NOT trigger infinite re-handshake loop
+// ---------------------------------------------------------------------------
+
+/**
+ * Starts a minimal HTTP server that always responds with a fixed status + body.
+ * Used here to avoid any interaction with MockMcpResource's auth logic.
+ */
+function startFixedHttpServer(statusCode, body) {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        res.statusCode = statusCode;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(body);
+      });
+    });
+    server.on('error', reject);
+    server.listen({ host: '127.0.0.1', port: 0 }, () => {
+      const port = server.address().port;
+      resolve({
+        server,
+        origin: `http://127.0.0.1:${port}`,
+        stop: () => new Promise((r) => server.close(r)),
+      });
+    });
+  });
+}
+
+/** Minimal token manager stub that always returns a fixed access token. */
+function makeFakeTokenManager(token = 'AT-FAKE') {
+  return {
+    getAccessToken: async () => ({ accessToken: token, refreshed: false }),
+  };
+}
+
+describe('OAuthHttpTransport — Issue #103: 404 rest_no_route terminates without loop', () => {
+  it('404 with rest_no_route body throws mcp_route_absent; performHandshake called at most once', async () => {
+    // Every request to the server returns 404 + rest_no_route.
+    // Before the fix: _postWithRetry recovers → performHandshake → _postWithRetry
+    // → 404 again → performHandshake → … unbounded recursion.
+    // After the fix: the guard throws immediately, performHandshake is never
+    // invoked from within _postWithRetry.
+    const srv = await startFixedHttpServer(
+      404,
+      JSON.stringify({ code: 'rest_no_route', message: 'No route was found matching the URL and request method.', data: { status: 404 } })
+    );
+    try {
+      const t = new OAuthHttpTransport({
+        endpoint: `${srv.origin}/wp-json/mcp/v1`,
+        tokenManager: makeFakeTokenManager(),
+        siteAuth: { siteId: 'test', authStatus: 'active' },
+        logger: () => {},
+      });
+
+      // Spy: count performHandshake calls.
+      let handshakeCalls = 0;
+      const origHandshake = t.performHandshake.bind(t);
+      t.performHandshake = async (...args) => {
+        handshakeCalls++;
+        return origHandshake(...args);
+      };
+
+      await assert.rejects(
+        t._postWithRetry(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })),
+        (err) => {
+          assert.equal(err.code, 'mcp_route_absent', `expected mcp_route_absent, got ${err.code}`);
+          assert.equal(err.statusCode, 404);
+          assert.match(err.message, /rest_no_route/);
+          return true;
+        }
+      );
+
+      // performHandshake must NOT have been called from within _postWithRetry.
+      assert.equal(handshakeCalls, 0,
+        'performHandshake must not be called when rest_no_route is detected (that was the loop)');
+    } finally {
+      await srv.stop();
+    }
+  });
+
+  it('persistent non-rest_no_route 404 converges: exactly one REAL re-handshake, no loop', { timeout: 5000 }, async () => {
+    // Server returns a non-rest_no_route 404 on EVERY request, including the
+    // re-handshake's own initialize POST — the case that previously looped
+    // unbounded with the real performHandshake. The Issue #103 _inHandshake guard
+    // bounds it to exactly one re-handshake; the outer retry (attempt=1) then
+    // skips recovery and returns the 404. The 5s timeout fails fast on regress.
+    const srv = await startFixedHttpServer(404, '{}');
+    try {
+      const t = new OAuthHttpTransport({
+        endpoint: `${srv.origin}/wp-json/mcp/v1`,
+        tokenManager: makeFakeTokenManager(),
+        siteAuth: { siteId: 'test', authStatus: 'active' },
+        logger: () => {},
+      });
+
+      // Seed cached init so the recovery path can execute.
+      t.cachedInitRequest = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} };
+
+      // Spy that calls through to the REAL performHandshake (which itself POSTs
+      // initialize — the recursion path the old no-op stub hid).
+      let handshakeCalls = 0;
+      const origHandshake = t.performHandshake.bind(t);
+      t.performHandshake = async (...args) => { handshakeCalls++; return origHandshake(...args); };
+
+      const result = await t._postWithRetry(
+        JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+      );
+
+      assert.equal(result.statusCode, 404);
+      assert.equal(handshakeCalls, 1,
+        'exactly one real re-handshake for a persistent non-rest_no_route 404 (no loop)');
+    } finally {
+      await srv.stop();
     }
   });
 });

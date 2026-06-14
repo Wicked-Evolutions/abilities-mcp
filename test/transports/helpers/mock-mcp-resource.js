@@ -26,6 +26,7 @@ class MockMcpResource {
     this.config = {
       statusOverride: null,
       statusForCount: 0,
+      bodyOverride: null,      // string: body to use when statusOverride fires
       successBodyFor: null,    // (req, body) => string
       ...opts.config,
     };
@@ -74,7 +75,7 @@ class MockMcpResource {
         this.config.statusForCount--;
         res.statusCode = this.config.statusOverride;
         res.setHeader('Content-Type', 'application/json');
-        res.end('');
+        res.end(this.config.bodyOverride || '');
         return;
       }
 

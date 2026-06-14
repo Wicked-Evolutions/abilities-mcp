@@ -717,3 +717,154 @@ describe('ConnectionPool — connectDefault per-site auth-init isolation (#76)',
     assert.match(config.sites.siteA._degraded_reason, /discovery failed/);
   });
 });
+
+/**
+ * Issue #103 (Component B) — prefer live-discovered protected-resource over
+ * stale persisted mcp_resource.
+ *
+ * Uses the `discover` injection seam (this._discover) to stub discovery
+ * with a controlled prMetadata.resource value, then asserts the created
+ * OAuthHttpTransport gets the correct endpoint.
+ */
+describe('ConnectionPool — Issue #103 Component B: live-discovered resource preference', () => {
+  function makeOAuthConfig(mcpResource) {
+    return {
+      defaultSite: 'siteA',
+      sites: {
+        siteA: {
+          url: 'https://example.com',
+          mcp_resource: mcpResource,
+          auth: {
+            method: 'oauth',
+            client_id: 'client-x',
+            access_token_ref: makeRef(SECRET_SERVICE, 'siteA/access'),
+            refresh_token_ref: makeRef(SECRET_SERVICE, 'siteA/refresh'),
+            access_token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+            refresh_token_expires_at: new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
+          },
+          auth_status: 'active',
+        },
+      },
+    };
+  }
+
+  async function makePool(config, discoveredResource) {
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+    const tm = new TokenManager({ secretStore: store, allowInsecure: true });
+
+    const discover = async (siteUrl) => ({
+      asMetadata: {
+        issuer: siteUrl,
+        token_endpoint: `${siteUrl}/oauth/token`,
+        authorization_endpoint: `${siteUrl}/oauth/authorize`,
+      },
+      asMetadataUrl: `${siteUrl}/.well-known/oauth-authorization-server`,
+      prMetadata: discoveredResource ? { resource: discoveredResource } : null,
+      prMetadataUrl: `${siteUrl}/.well-known/oauth-protected-resource`,
+      probeResults: [],
+    });
+
+    const pool = new ConnectionPool(config, () => {}, {
+      secretStore: store,
+      tokenManager: tm,
+      discover,
+      allowInsecure: true,
+    });
+    return pool;
+  }
+
+  it('when live discovery resource differs from persisted mcp_resource, uses live resource', async () => {
+    const persistedResource = 'https://example.com/wp-json/mcp/old-adapter-name';
+    const liveResource = 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server';
+    const config = makeOAuthConfig(persistedResource);
+
+    const pool = await makePool(config, liveResource);
+    const transport = await pool._createTransport('siteA', null);
+
+    assert.ok(transport instanceof OAuthHttpTransport);
+    assert.equal(transport.endpoint, liveResource,
+      'live-discovered resource (RFC 9728 authoritative) should be used when persisted value is stale');
+    assert.notEqual(transport.endpoint, persistedResource,
+      'stale persisted mcp_resource must not be used when live discovery provides a different value');
+  });
+
+  it('when live discovery resource equals persisted mcp_resource, uses mcp_resource (no-op)', async () => {
+    const resource = 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server';
+    const config = makeOAuthConfig(resource);
+
+    const pool = await makePool(config, resource);
+    const transport = await pool._createTransport('siteA', null);
+
+    assert.ok(transport instanceof OAuthHttpTransport);
+    assert.equal(transport.endpoint, resource,
+      'when persisted and live values match, endpoint is unchanged');
+  });
+
+  it('when resolvedEndpoint is set (multisite subsite), it wins over live discovery', async () => {
+    // resolvedEndpoint is the operator-configured subsite endpoint and always
+    // takes precedence — live discovery does not override it.
+    const persistedResource = 'https://example.com/wp-json/mcp/old-adapter';
+    const liveResource = 'https://example.com/wp-json/mcp/new-adapter';
+    // resolveSiteKey (lib/config.js) builds a subsite endpoint as:
+    //   subsite origin + the PARENT mcp_resource pathname.
+    // It is intentionally derived from the persisted parent route, NOT from live
+    // discovery — so the expected value carries the parent's `/old-adapter` path
+    // on the subsite host. Component B must not override this operator-derived
+    // endpoint.
+    const subsiteEndpoint = 'https://community.example.com/wp-json/mcp/old-adapter';
+
+    // Use a config with multisite so resolveSiteKey produces a resolvedEndpoint.
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+    const tm = new TokenManager({ secretStore: store, allowInsecure: true });
+
+    const config = {
+      defaultSite: 'siteA',
+      sites: {
+        siteA: {
+          url: 'https://example.com',
+          mcp_resource: persistedResource,
+          auth: {
+            method: 'oauth',
+            client_id: 'client-x',
+            access_token_ref: makeRef(SECRET_SERVICE, 'siteA/access'),
+            refresh_token_ref: makeRef(SECRET_SERVICE, 'siteA/refresh'),
+            access_token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+            refresh_token_expires_at: new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
+          },
+          auth_status: 'active',
+          multisite: {
+            community: 'https://community.example.com',
+          },
+        },
+      },
+    };
+
+    const discover = async (siteUrl) => ({
+      asMetadata: {
+        issuer: siteUrl,
+        token_endpoint: `${siteUrl}/oauth/token`,
+        authorization_endpoint: `${siteUrl}/oauth/authorize`,
+      },
+      asMetadataUrl: `${siteUrl}/.well-known/oauth-authorization-server`,
+      prMetadata: { resource: liveResource },
+      prMetadataUrl: `${siteUrl}/.well-known/oauth-protected-resource`,
+      probeResults: [],
+    });
+
+    const pool = new ConnectionPool(config, () => {}, {
+      secretStore: store, tokenManager: tm, discover, allowInsecure: true,
+    });
+
+    // siteA.community produces a resolvedEndpoint via resolveSiteKey.
+    const transport = await pool._createTransport('siteA.community', null);
+    assert.ok(transport instanceof OAuthHttpTransport);
+    assert.equal(transport.endpoint, subsiteEndpoint,
+      'resolvedEndpoint (multisite subsite) must win over live-discovered resource');
+    assert.notEqual(transport.endpoint, liveResource,
+      'live-discovered resource must NOT override an operator-derived subsite endpoint');
+  });
+});

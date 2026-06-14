@@ -12,3 +12,11 @@ wp-sites.json
 .idea/
 *.swp
 *.swo
+
+# Local agent tooling / metadata — never published (matches at any depth)
+.ijfw/
+**/.ijfw/
+.claude/
+ijfw/
+AGENTS.md
+CLAUDE.md
