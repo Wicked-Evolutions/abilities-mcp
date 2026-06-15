@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { loadConfig, resolvePassword, resolveConfigFilePath } = require('../lib/config');
+const { makeTempHome } = require('./helpers/temp-home');
 
 /**
  * Issue #5 / Phase E.2 — async config loading.
@@ -80,9 +81,7 @@ describe('resolveConfigFilePath — async surface (Issue #5)', () => {
   it('returns null when no on-disk file applies (env-var single-site path)', async () => {
     // Force the script-dir + home candidates to miss by pointing HOME at an
     // empty tmp dir, then verify null is returned. Restored after.
-    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
-    const origHome = process.env.HOME;
-    process.env.HOME = fakeHome;
+    const home = makeTempHome();
     try {
       // Also requires no script-adjacent wp-sites.json. The repo carries one
       // for local dev, so we only assert behavior when we know neither path
@@ -94,8 +93,7 @@ describe('resolveConfigFilePath — async surface (Issue #5)', () => {
       const result = await resolveConfigFilePath({});
       assert.equal(result, null);
     } finally {
-      if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-      try { fs.rmSync(fakeHome, { recursive: true, force: true }); } catch { /* ignore */ }
+      home.restore();
     }
   });
 });

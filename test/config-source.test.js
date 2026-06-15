@@ -12,6 +12,7 @@ const {
   tildify,
   siteAuthLabel,
 } = require('../lib/config-source-line');
+const { makeTempHome } = require('./helpers/temp-home');
 
 /**
  * Issue #32 — Phase B of the v1.5.2 sprint.
@@ -67,14 +68,12 @@ describe('loadConfig — _configSource discriminant per branch (Issue #32)', () 
   });
 
   it('home-dir: ~/.abilities-mcp/wp-sites.json is picked up with home-dir discriminant', async () => {
-    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'abilities-mcp-home-'));
-    const homeConfigDir = path.join(fakeHome, '.abilities-mcp');
+    const home = makeTempHome();
+    const homeConfigDir = path.join(home.dir, '.abilities-mcp');
     fs.mkdirSync(homeConfigDir, { recursive: true });
     const homeConfigFile = path.join(homeConfigDir, 'wp-sites.json');
     fs.writeFileSync(homeConfigFile, JSON.stringify(APPPASSWORD_HTTP_SITE, null, 2), { mode: 0o600 });
 
-    const origHome = process.env.HOME;
-    process.env.HOME = fakeHome;
     try {
       // The script-adjacent path takes precedence over home-dir — skip if the repo
       // happens to carry a script-adjacent wp-sites.json (dev machines often do).
@@ -86,9 +85,7 @@ describe('loadConfig — _configSource discriminant per branch (Issue #32)', () 
       assert.equal(cfg._configSource, 'home-dir');
       assert.equal(cfg._configSourceLabel, homeConfigFile);
     } finally {
-      if (origHome === undefined) delete process.env.HOME;
-      else process.env.HOME = origHome;
-      try { fs.rmSync(fakeHome, { recursive: true, force: true }); } catch { /* ignore */ }
+      home.restore();
     }
   });
 
@@ -97,9 +94,7 @@ describe('loadConfig — _configSource discriminant per branch (Issue #32)', () 
     const origUser = process.env.ABILITIES_MCP_USERNAME;
     const origPass = process.env.ABILITIES_MCP_PASSWORD;
 
-    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'abilities-mcp-home-'));
-    const origHome = process.env.HOME;
-    process.env.HOME = fakeHome;
+    const home = makeTempHome();
     process.env.ABILITIES_MCP_URL = 'https://wickedevolutions.com';
     process.env.ABILITIES_MCP_USERNAME = 'wicked';
     process.env.ABILITIES_MCP_PASSWORD = 'app-pw';
@@ -111,20 +106,17 @@ describe('loadConfig — _configSource discriminant per branch (Issue #32)', () 
       assert.equal(cfg._configSource, 'env-var');
       assert.equal(cfg._configSourceLabel, 'wickedevolutions.com');
     } finally {
-      if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+      home.restore();
       if (origUrl === undefined) delete process.env.ABILITIES_MCP_URL; else process.env.ABILITIES_MCP_URL = origUrl;
       if (origUser === undefined) delete process.env.ABILITIES_MCP_USERNAME; else process.env.ABILITIES_MCP_USERNAME = origUser;
       if (origPass === undefined) delete process.env.ABILITIES_MCP_PASSWORD; else process.env.ABILITIES_MCP_PASSWORD = origPass;
-      try { fs.rmSync(fakeHome, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   });
 
   it('legacy-cli: --host / --path sets _configSource=legacy-cli and label is host', async () => {
     const origUrl = process.env.ABILITIES_MCP_URL;
     delete process.env.ABILITIES_MCP_URL;
-    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'abilities-mcp-home-'));
-    const origHome = process.env.HOME;
-    process.env.HOME = fakeHome;
+    const home = makeTempHome();
     try {
       const scriptAdjacent = path.resolve(__dirname, '..', 'wp-sites.json');
       if (fs.existsSync(scriptAdjacent)) return;
@@ -132,9 +124,8 @@ describe('loadConfig — _configSource discriminant per branch (Issue #32)', () 
       assert.equal(cfg._configSource, 'legacy-cli');
       assert.equal(cfg._configSourceLabel, 'legacy.example');
     } finally {
-      if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+      home.restore();
       if (origUrl !== undefined) process.env.ABILITIES_MCP_URL = origUrl;
-      try { fs.rmSync(fakeHome, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   });
 });
@@ -185,7 +176,7 @@ describe('formatConfigSourceLine — per-source output format', () => {
       },
     });
     assert.match(line, /^Config source: \[home-dir\]/);
-    assert.match(line, /~\/\.abilities-mcp\/wp-sites\.json/);
+    assert.match(line, /~[\\/]\.abilities-mcp[\\/]wp-sites\.json/);
     assert.match(line, /3 sites:/);
     assert.match(line, /helena oauth/);
     assert.match(line, /wicked oauth/);
