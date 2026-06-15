@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { openBrowser, _commandFor } = require('../../lib/auth/browser-launcher');
+const { openBrowser, _commandFor, _needsVerbatim } = require('../../lib/auth/browser-launcher');
 
 describe('browser-launcher', () => {
   it('selects the right command per platform', () => {
@@ -29,5 +29,18 @@ describe('browser-launcher', () => {
     assert.deepEqual(calls, ['https://example.com']);
     assert.equal(result.spawned, true);
     assert.equal(result.platform, 'override');
+  });
+
+  it('passes URL with ampersands intact via launcher override', async () => {
+    const url = 'https://example.com/oauth/authorize?response_type=code&client_id=abc&redirect_uri=https%3A%2F%2Fcallback';
+    const calls = [];
+    await openBrowser(url, { launcher: async (u) => { calls.push(u); } });
+    assert.equal(calls[0], url, 'URL must not be truncated at &');
+  });
+
+  it('reports verbatim-arguments need for win32 only', () => {
+    assert.equal(_needsVerbatim('win32'), true);
+    assert.equal(_needsVerbatim('darwin'), false);
+    assert.equal(_needsVerbatim('linux'), false);
   });
 });
