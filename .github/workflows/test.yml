@@ -8,13 +8,19 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    # windows-latest is non-blocking for now: it provides ongoing Windows signal
+    # while the loopback-bind flakiness (#119) is fixed. Remove this once #119
+    # lands so Windows becomes a required, blocking check.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node-version: ['18', '20', '22']
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Node ${{ matrix.node-version }}
+      - name: Setup Node ${{ matrix.node-version }} on ${{ matrix.os }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
