@@ -228,6 +228,58 @@ describe('OAuthHttpTransport — 401 → forceRefresh → retry-once', () => {
       await server.stop(); await resource.stop();
     }
   });
+
+  it('retries an in-flight stale 401 with an externally reauthorized generation before forcing refresh', async () => {
+    const calls = [];
+    const oldAuth = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-old',
+      credentialIdentity: 'identity-old',
+      mcpResource: 'http://127.0.0.1:1/old-resource',
+    });
+    const newAuth = {
+      ...oldAuth,
+      credentialGeneration: 'generation-new',
+      credentialIdentity: 'identity-new',
+      clientId: 'client-after-reauth',
+      mcpResource: 'http://127.0.0.1:1/new-resource',
+      accessTokenRef: makeRef(SECRET_SERVICE, 'siteA/access-new'),
+      refreshTokenRef: makeRef(SECRET_SERVICE, 'siteA/refresh-new'),
+    };
+    const tokenManager = {
+      async getAccessToken(_auth, opts) {
+        calls.push(opts);
+        if (calls.length === 1) return { accessToken: 'AT-OLD', refreshed: false };
+        if (calls.length === 2) {
+          return { accessToken: 'AT-NEW', refreshed: false, updatedAuth: newAuth };
+        }
+        return { accessToken: 'AT-NEW', refreshed: false };
+      },
+    };
+    const t = new OAuthHttpTransport({
+      endpoint: oldAuth.mcpResource, tokenManager, siteAuth: oldAuth, logger: () => {},
+    });
+    const requests = [];
+    t._post = async (_body, bearer) => {
+      requests.push({ bearer, endpoint: t.endpoint, generation: t._siteAuth.credentialGeneration });
+      return requests.length === 1
+        ? { statusCode: 401, body: '' }
+        : { statusCode: 200, body: '' };
+    };
+
+    const result = await t._postWithRetry('{}');
+
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(calls, [
+      { forceRefresh: false },
+      { forceRefresh: false },
+      { forceRefresh: false },
+    ], 'an old 401 reloads the new generation instead of rotating it');
+    assert.deepEqual(requests, [
+      { bearer: 'AT-OLD', endpoint: oldAuth.mcpResource, generation: 'generation-old' },
+      { bearer: 'AT-NEW', endpoint: newAuth.mcpResource, generation: 'generation-new' },
+    ]);
+    assert.equal(t._siteAuth.clientId, 'client-after-reauth');
+  });
 });
 
 describe('OAuthHttpTransport — terminal 401 after refresh', () => {
