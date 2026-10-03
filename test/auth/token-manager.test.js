@@ -80,8 +80,8 @@ describe('TokenManager authoritative expiry metadata', () => {
 });
 
 describe('TokenManager.refresh — retry semantics', () => {
-  it('retries up to 2 times on 5xx with the same refresh token', async () => {
-    const server = await new MockAuthServer({ refreshFailures: 2 }).start();
+  it('makes at most two replay-safe sends on 5xx with the same refresh token', async () => {
+    const server = await new MockAuthServer({ refreshFailures: 1 }).start();
     try {
       const store = new MemorySecretStore();
       await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
@@ -93,8 +93,8 @@ describe('TokenManager.refresh — retry semantics', () => {
       }));
       assert.match(tokens.access_token, /^at-/);
       assert.equal(updatedAuth.authStatus, 'active');
-      // Server saw 3 attempts (2 failures + 1 success).
-      assert.equal(server._refreshAttempts, 3);
+      // Server saw two attempts (one failure + one success).
+      assert.equal(server._refreshAttempts, 2);
     } finally { await server.stop(); }
   });
 
@@ -373,7 +373,7 @@ describe('TokenManager.persistTokens', () => {
     const tm = new TokenManager({ secretStore: store, deps: { now: () => 1_700_000_000_000 } });
     const result = await tm.persistTokens({
       siteId: 'siteA',
-      tokens: { access_token: 'AT', refresh_token: 'RT', expires_in: 3600 },
+      tokens: { access_token: 'AT', refresh_token: 'RT', expires_in: 3600, refresh_token_timeout: 90 * 24 * 3600 },
     });
     assert.equal(await store.get(SECRET_SERVICE, 'siteA/access'), 'AT');
     assert.equal(await store.get(SECRET_SERVICE, 'siteA/refresh'), 'RT');

@@ -1,8 +1,23 @@
 # OAuth renewal and credential-state design
 
-Status: pre-implementation design for independent security/correctness review.
+Status: implemented bridge design; requires independent post-implementation
+security/correctness review before merge.
 Scope: Abilities MCP #120, coordinated with Mycelium for WordPress #106/#107.
 This document makes no live keychain, configuration, or server changes.
+
+## Implementation boundary
+
+The bridge now writes a versioned pair into one keychain item and publishes
+only its opaque reference, generation and non-secret lifetime metadata to the
+configuration. A normal request reloads that configuration and validates the
+pair generation before use, so a separately completed reauthorization wins
+over a cached process. Refresh writes a non-secret `refresh_attempt` marker
+before each bounded HTTP send; a complete prepared pair can be published after
+a restart, while an incomplete outcome becomes a typed reauthorization path
+once the original recovery budget has elapsed. Fresh authorization,
+reauthorization, upgrade, runtime refresh and the OAuth test command all use
+the pair format. Legacy fixed references remain readable until their first
+successful refresh or explicit reauthorization migrates them.
 
 ## What is broken
 

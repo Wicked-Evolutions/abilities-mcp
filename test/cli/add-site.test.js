@@ -109,9 +109,12 @@ describe('CLI add-site', () => {
       assert.ok(cfg.sites.mock.oauth_capability_pinned);
       assert.ok(cfg.sites.mock.oauth_capability_pinned.first_seen_at);
       assert.ok(cfg.sites.mock.mcp_resource);
-      // Tokens persisted to keychain.
-      const at = await h.ctx.secretStore.get('abilities-mcp', 'mock/access');
-      assert.match(at, /^at-/);
+      // One generation-addressed pair is persisted; fixed token accounts are
+      // not reintroduced by a fresh authorization.
+      assert.match(cfg.sites.mock.auth.credential_pair_ref, /^keychain:\/\/abilities-mcp\//);
+      const account = new URL(cfg.sites.mock.auth.credential_pair_ref).pathname.slice(1);
+      const pair = JSON.parse(await h.ctx.secretStore.get('abilities-mcp', account));
+      assert.match(pair.access_token, /^at-/);
     });
 
     it('emits state-machine progress lines', async () => {

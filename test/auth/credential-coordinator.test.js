@@ -22,6 +22,25 @@ function makeRoot() {
   return root;
 }
 
+function writeConfig(root, siteId, auth) {
+  const file = path.join(root, 'wp-sites.json');
+  fs.writeFileSync(file, JSON.stringify({
+    schema_version: 2,
+    sites: { [siteId]: { url: 'https://example.test', auth, auth_status: 'active' } },
+  }));
+  return file;
+}
+
+function legacyAuth() {
+  return {
+    method: 'oauth', client_id: 'client-a',
+    access_token_ref: makeRef('abilities-mcp', 'site/access'),
+    refresh_token_ref: makeRef('abilities-mcp', 'site/refresh'),
+    access_token_expires_at: '2026-10-04T00:00:00.000Z',
+    refresh_token_expires_at: '2026-12-01T00:00:00.000Z',
+  };
+}
+
 describe('CredentialCoordinator', () => {
   it('stores a complete generation-addressed pair in one keychain item', async () => {
     const store = new MemorySecretStore();
@@ -107,5 +126,84 @@ describe('CredentialCoordinator', () => {
     assert.equal(second.code, 2);
     assert.match(second.output, /error:credential_operation_busy/);
     await new Promise((resolve, reject) => first.on('close', (code) => code === 0 ? resolve() : reject(new Error(String(code)))));
+  });
+
+  it('publishes a complete refreshed pair only after a durable attempt marker', async () => {
+    const root = makeRoot();
+    const configPath = writeConfig(root, 'site', legacyAuth());
+    const store = new MemorySecretStore();
+    const coordinator = new CredentialCoordinator({ secretStore: store, configPath, siteId: 'site', deps: { stateRoot: root } });
+    const current = {
+      siteId: 'site', accessTokenRef: makeRef('abilities-mcp', 'site/access'),
+      refreshTokenRef: makeRef('abilities-mcp', 'site/refresh'), accessTokenExpiresAt: '2026-10-04T00:00:00.000Z',
+      refreshTokenExpiresAt: '2026-12-01T00:00:00.000Z', _refreshToken: 'RT-old',
+    };
+    const marker = await coordinator.beginRefresh(current);
+    let disk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.equal(disk.sites.site.auth.refresh_attempt.nonce, marker.nonce);
+    await coordinator.recordRefreshAttempt(marker);
+    const committed = await coordinator.commitRefresh(marker, current, { access_token: 'AT-new', refresh_token: 'RT-new' }, {
+      accessTokenExpiresAt: '2026-10-04T01:00:00.000Z', refreshTokenExpiresAt: '2026-12-01T00:00:00.000Z',
+      authorizationExpiresAt: null, nextRefreshAt: '2026-10-04T00:54:00.000Z', expirySource: 'authoritative',
+    });
+    disk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.equal(disk.sites.site.auth.refresh_attempt, undefined);
+    assert.equal(disk.sites.site.auth.access_token_ref, undefined);
+    assert.equal(disk.sites.site.auth.credential_generation, marker.credential_generation);
+    assert.equal((await coordinator.readPair({ credential_pair_ref: committed.credentialPairRef, credential_generation: committed.credentialGeneration })).refresh_token, 'RT-new');
+  });
+
+  it('recovers a prepared complete pair after restart without retrying the old refresh token', async () => {
+    const root = makeRoot();
+    const configPath = writeConfig(root, 'site', legacyAuth());
+    const store = new MemorySecretStore();
+    const first = new CredentialCoordinator({ secretStore: store, configPath, siteId: 'site', deps: { stateRoot: root } });
+    const current = { siteId: 'site', accessTokenRef: makeRef('abilities-mcp', 'site/access'), refreshTokenRef: makeRef('abilities-mcp', 'site/refresh') };
+    const marker = await first.beginRefresh(current);
+    await first.withConfigCommitLock('test-prepared', async ({ config }) => {
+      config.sites.site.auth.refresh_attempt.prepared_metadata = {
+        access_token_expires_at: '2026-10-04T01:00:00.000Z', refresh_token_expires_at: null,
+        authorization_expires_at: null, next_refresh_at: '2026-10-04T00:54:00.000Z', refresh_expiry_source: 'authoritative',
+      };
+      return { write: true };
+    });
+    await first.preparePair({ credentialIdentity: marker.credential_identity, generation: marker.credential_generation,
+      slot: marker.credential_pair_slot, tokens: { access_token: 'AT-ready', refresh_token: 'RT-ready' },
+      accessTokenExpiresAt: '2026-10-04T01:00:00.000Z', nextRefreshAt: '2026-10-04T00:54:00.000Z' });
+    const restarted = new CredentialCoordinator({ secretStore: store, configPath, siteId: 'site', deps: { stateRoot: root } });
+    const recovered = await restarted.recoverPrepared(current);
+    assert.equal(recovered.credentialGeneration, marker.credential_generation);
+    assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).sites.site.auth.refresh_attempt, undefined);
+  });
+
+  it('reloads an externally reauthorized pair before an ordinary token read', async () => {
+    const root = makeRoot();
+    const store = new MemorySecretStore();
+    const first = new CredentialCoordinator({ secretStore: store, deps: { stateRoot: root } });
+    const oldPair = await first.preparePair({ credentialIdentity: 'a'.repeat(64), auth: { credential_pair_slot: 'b' },
+      tokens: { access_token: 'AT-old', refresh_token: 'RT-old' }, accessTokenExpiresAt: '2026-10-04T00:00:00.000Z' });
+    const configPath = writeConfig(root, 'site', {
+      method: 'oauth', client_id: 'old-client', access_token_expires_at: oldPair.access_token_expires_at,
+      credential_pair_ref: oldPair.credential_pair_ref, credential_generation: oldPair.credential_generation,
+      credential_identity: oldPair.credential_identity, credential_pair_slot: oldPair.credential_pair_slot,
+    });
+    const current = new CredentialCoordinator({ secretStore: store, configPath, siteId: 'site', deps: { stateRoot: root } });
+    await current.claimOwnership(oldPair.credential_identity);
+    const newPair = await first.preparePair({ credentialIdentity: oldPair.credential_identity, auth: oldPair,
+      tokens: { access_token: 'AT-new', refresh_token: 'RT-new' }, accessTokenExpiresAt: '2026-10-05T00:00:00.000Z' });
+    const disk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    Object.assign(disk.sites.site.auth, {
+      client_id: 'new-client', credential_pair_ref: newPair.credential_pair_ref,
+      credential_generation: newPair.credential_generation, credential_pair_slot: newPair.credential_pair_slot,
+    });
+    fs.writeFileSync(configPath, JSON.stringify(disk));
+    const snapshot = await current.readValidatedSnapshot({
+      siteId: 'site', tokenEndpoint: 'https://issuer.test/token', clientId: 'old-client',
+      credentialPairRef: oldPair.credential_pair_ref, credentialGeneration: oldPair.credential_generation,
+      credentialIdentity: oldPair.credential_identity, credentialPairSlot: oldPair.credential_pair_slot,
+    });
+    assert.equal(snapshot.clientId, 'new-client');
+    assert.equal(snapshot._accessToken, 'AT-new');
+    assert.equal(snapshot.credentialGeneration, newPair.credential_generation);
   });
 });
