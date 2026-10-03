@@ -8,6 +8,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const { CredentialCoordinator } = require('../../lib/auth/credential-coordinator');
+const { TokenManager } = require('../../lib/auth/token-manager');
 const { MemorySecretStore } = require('../../lib/auth/memory-secret-store');
 const { makeRef } = require('../../lib/auth/secret-store');
 
@@ -205,5 +206,31 @@ describe('CredentialCoordinator', () => {
     assert.equal(snapshot.clientId, 'new-client');
     assert.equal(snapshot._accessToken, 'AT-new');
     assert.equal(snapshot.credentialGeneration, newPair.credential_generation);
+  });
+
+  it('refreshes an existing generated pair through a real config-backed TokenManager', async () => {
+    const root = makeRoot();
+    const store = new MemorySecretStore();
+    const seed = new CredentialCoordinator({ secretStore: store, deps: { stateRoot: root } });
+    const pair = await seed.preparePair({ credentialIdentity: 'b'.repeat(64), auth: { credential_pair_slot: 'b' },
+      tokens: { access_token: 'AT-old', refresh_token: 'RT-old' }, accessTokenExpiresAt: '2026-10-03T00:00:00.000Z' });
+    const configPath = writeConfig(root, 'site', {
+      method: 'oauth', client_id: 'client-a', access_token_expires_at: pair.access_token_expires_at,
+      credential_pair_ref: pair.credential_pair_ref, credential_generation: pair.credential_generation,
+      credential_identity: pair.credential_identity, credential_pair_slot: pair.credential_pair_slot,
+    });
+    const coordinator = new CredentialCoordinator({ secretStore: store, configPath, siteId: 'site',
+      deps: { stateRoot: root, now: () => Date.parse('2026-10-03T00:00:00.000Z') } });
+    const tm = new TokenManager({ secretStore: store, credentialCoordinator: coordinator,
+      deps: { now: () => Date.parse('2026-10-03T00:00:00.000Z'), sleep: async () => {},
+        postForm: async () => ({ statusCode: 200, json: { access_token: 'AT-new', refresh_token: 'RT-new', expires_in: 3600, refresh_token_timeout: 7200 } }) } });
+    const result = await tm.refresh({ siteId: 'site', tokenEndpoint: 'https://issuer.test/token', clientId: 'client-a',
+      credentialPairRef: pair.credential_pair_ref, credentialGeneration: pair.credential_generation,
+      credentialIdentity: pair.credential_identity, credentialPairSlot: pair.credential_pair_slot,
+      accessTokenExpiresAt: pair.access_token_expires_at, _accessToken: 'AT-old', _refreshToken: 'RT-old' });
+    assert.equal(result.tokens.access_token, 'AT-new');
+    const disk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.notEqual(disk.sites.site.auth.credential_generation, pair.credential_generation);
+    assert.equal(disk.sites.site.auth.refresh_attempt, undefined);
   });
 });
