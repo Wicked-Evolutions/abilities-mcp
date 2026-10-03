@@ -105,6 +105,18 @@ describe('CredentialCoordinator', () => {
     await held;
   });
 
+  it('reclaims a confirmed-dead lock without waiting past the refresh recovery budget', async () => {
+    const root = makeRoot();
+    const coordinator = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const identity = 'c'.repeat(64);
+    const lock = path.join(root, `${require('node:crypto').createHash('sha256').update(identity).digest('hex')}.credential.lock`);
+    fs.mkdirSync(lock, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ nonce: 'dead', pid: 99999999 }), { mode: 0o600 });
+    let entered = false;
+    await coordinator.withCredentialLock(identity, 'refresh', async () => { entered = true; });
+    assert.equal(entered, true);
+  });
+
   it('refuses a simultaneous lock attempt from a second Node process', async () => {
     const root = makeRoot();
     const worker = path.join(__dirname, 'helpers', 'credential-lock-worker.js');
