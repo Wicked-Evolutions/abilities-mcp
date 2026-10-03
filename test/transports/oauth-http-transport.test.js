@@ -336,6 +336,45 @@ describe('OAuthHttpTransport — 401 → forceRefresh → retry-once', () => {
     ]);
     assert.equal(tokenReads, 3, 'the stale request retried the adopted snapshot without a reload or rotation');
   });
+
+  it('binds a refreshed bearer to its resource snapshot across an async renewal observer', async () => {
+    const base = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-old', mcpResource: 'http://127.0.0.1:1/old-resource',
+    });
+    const authA = { ...base, credentialGeneration: 'generation-a', mcpResource: 'http://127.0.0.1:1/resource-a' };
+    const authB = { ...base, credentialGeneration: 'generation-b', mcpResource: 'http://127.0.0.1:1/resource-b' };
+    let reads = 0;
+    const tokenManager = {
+      async getAccessToken() {
+        reads += 1;
+        if (reads === 1) return { accessToken: 'AT-A', refreshed: true, updatedAuth: authA };
+        return { accessToken: 'AT-B', refreshed: false, updatedAuth: authB };
+      },
+    };
+    const observerEntered = deferred();
+    const releaseObserver = deferred();
+    const t = new OAuthHttpTransport({
+      endpoint: base.mcpResource, tokenManager, siteAuth: base, logger: () => {},
+      onTokensRenewed: async () => { observerEntered.resolve(); await releaseObserver.promise; },
+    });
+    t.sessionId = 'old-resource-session';
+    const sent = [];
+    t._post = async (_body, bearer, snapshot) => {
+      sent.push({ bearer, endpoint: snapshot.endpoint, generation: snapshot.generation, sessionId: snapshot.sessionId });
+      return { statusCode: 200, body: '' };
+    };
+
+    const a = t._postWithRetry('{"request":"a"}');
+    await observerEntered.promise;
+    await t._postWithRetry('{"request":"b"}');
+    releaseObserver.resolve();
+    await a;
+
+    assert.deepEqual(sent, [
+      { bearer: 'AT-B', endpoint: authB.mcpResource, generation: 'generation-b', sessionId: null },
+      { bearer: 'AT-A', endpoint: authA.mcpResource, generation: 'generation-a', sessionId: null },
+    ]);
+  });
 });
 
 describe('OAuthHttpTransport — terminal 401 after refresh', () => {

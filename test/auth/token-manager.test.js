@@ -80,6 +80,34 @@ describe('TokenManager authoritative expiry metadata', () => {
 });
 
 describe('TokenManager.refresh — retry semantics', () => {
+  it('preserves a durable marker budget error instead of relabelling it as network_error', async () => {
+    let sends = 0;
+    const marker = { recovery_deadline_at: new Date(Date.now() + 10_000).toISOString() };
+    const coordinator = {
+      hasConfig: true,
+      async withAuthorizationLock(_operation, fn) { return fn(); },
+      async readValidatedSnapshot(auth) { return auth; },
+      async withCredentialLock(_identity, _operation, fn) { return fn(); },
+      async recoverPrepared() { return { retry: true, marker }; },
+      async recordRefreshAttempt() {
+        throw new RefreshError('OAuth refresh outcome is unknown; run reauth', {
+          code: 'unknown_refresh_outcome', state: 'refreshing',
+        });
+      },
+    };
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+    const tm = new TokenManager({
+      secretStore: store, credentialCoordinator: coordinator,
+      deps: { postForm: async () => { sends += 1; return { statusCode: 200, json: {} }; } },
+    });
+    await assert.rejects(
+      tm.refresh(buildSiteAuth()),
+      (err) => err.code === 'unknown_refresh_outcome'
+    );
+    assert.equal(sends, 0, 'no HTTP send occurs after the durable budget closes');
+  });
+
   it('makes at most two replay-safe sends on 5xx with the same refresh token', async () => {
     const server = await new MockAuthServer({ refreshFailures: 1 }).start();
     try {

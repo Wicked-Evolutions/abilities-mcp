@@ -383,6 +383,44 @@ describe('CredentialCoordinator', () => {
     assert.equal(snapshot.credentialGeneration, newPair.credential_generation);
   });
 
+  it('adopts a distinct reauthorization identity even when the cached legacy identity was refused elsewhere', async () => {
+    const root = makeRoot();
+    const store = new MemorySecretStore();
+    fs.mkdirSync(path.join(root, 'a'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'b'), { recursive: true });
+    const seed = new CredentialCoordinator({ secretStore: store, deps: { stateRoot: root } });
+    const oldPair = await seed.preparePair({ credentialIdentity: 'c'.repeat(64), auth: { credential_pair_slot: 'b' },
+      tokens: { access_token: 'AT-old', refresh_token: 'RT-old' }, accessTokenExpiresAt: '2026-10-04T00:00:00.000Z' });
+    const newPair = await seed.preparePair({ credentialIdentity: 'd'.repeat(64), auth: { credential_pair_slot: 'b' },
+      tokens: { access_token: 'AT-new', refresh_token: 'RT-new' }, accessTokenExpiresAt: '2026-10-05T00:00:00.000Z' });
+    const configA = writeConfig(path.join(root, 'a'), 'site-a', {
+      method: 'oauth', credential_pair_ref: oldPair.credential_pair_ref, credential_generation: oldPair.credential_generation,
+      credential_identity: oldPair.credential_identity, credential_pair_slot: oldPair.credential_pair_slot,
+    });
+    const configB = writeConfig(path.join(root, 'b'), 'site-b', {
+      method: 'oauth', credential_pair_ref: oldPair.credential_pair_ref, credential_generation: oldPair.credential_generation,
+      credential_identity: oldPair.credential_identity, credential_pair_slot: oldPair.credential_pair_slot,
+    });
+    const ownerA = new CredentialCoordinator({ secretStore: store, configPath: configA, siteId: 'site-a', deps: { stateRoot: root } });
+    const processB = new CredentialCoordinator({ secretStore: store, configPath: configB, siteId: 'site-b', deps: { stateRoot: root } });
+    await ownerA.claimOwnership(oldPair.credential_identity);
+    await assert.rejects(processB.claimOwnership(oldPair.credential_identity), (err) => err.code === 'shared_credential_config_unsupported');
+
+    const diskB = JSON.parse(fs.readFileSync(configB, 'utf8'));
+    Object.assign(diskB.sites['site-b'].auth, {
+      credential_pair_ref: newPair.credential_pair_ref, credential_generation: newPair.credential_generation,
+      credential_identity: newPair.credential_identity, credential_pair_slot: newPair.credential_pair_slot,
+    });
+    fs.writeFileSync(configB, JSON.stringify(diskB));
+    const adopted = await processB.readValidatedSnapshot({
+      siteId: 'site-b', credentialPairRef: oldPair.credential_pair_ref,
+      credentialGeneration: oldPair.credential_generation, credentialIdentity: oldPair.credential_identity,
+      credentialPairSlot: oldPair.credential_pair_slot,
+    });
+    assert.equal(adopted.credentialIdentity, newPair.credential_identity);
+    assert.equal(adopted._accessToken, 'AT-new');
+  });
+
   it('refreshes an existing generated pair through a real config-backed TokenManager', async () => {
     const root = makeRoot();
     const store = new MemorySecretStore();
