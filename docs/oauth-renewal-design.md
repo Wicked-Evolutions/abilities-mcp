@@ -239,10 +239,13 @@ reading or sending that token. Restarting the bridge or re-running the CLI
 performs discovery for the current site URL; ordinary renewal and
 reauthorization on an unchanged site remain automatic.
 
-`reauth` holds a visible per-site authorization lock while browser consent is
-in progress, but takes the short global commit lock only for final commit; it
-never holds a whole-config lock while waiting for the browser. A request that
-requires refresh during consent waits for a bounded period and then returns
+`reauth` and `upgrade-auth` hold a visible per-site authorization lock while
+browser consent is in progress, but take the short global commit lock only for
+final commit; neither holds a whole-config lock while waiting for the browser.
+The same lock protects upgrade validation rollback and `--confirm` fallback
+deletion, so an older failed validation cannot republish an App Password or
+delete a fallback during another consent operation. A request that requires
+refresh during consent waits for a bounded period and then returns
 `reauth_in_progress`; it must not combine an old client ID with new
 credentials. Reauthorization merges unrelated current config fields while
 atomically committing the new client ID, resource metadata, credential pair,
