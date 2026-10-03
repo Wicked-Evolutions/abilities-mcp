@@ -117,6 +117,22 @@ describe('CredentialCoordinator', () => {
     assert.equal(entered, true);
   });
 
+  it('lets only one concurrent reclaimer acquire a confirmed-dead lock', async () => {
+    const root = makeRoot();
+    const identity = 'd'.repeat(64);
+    const lock = path.join(root, `${require('node:crypto').createHash('sha256').update(identity).digest('hex')}.credential.lock`);
+    fs.mkdirSync(lock, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ nonce: 'dead', pid: 99999999 }), { mode: 0o600 });
+    const one = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const two = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    let release;
+    const hold = one.withCredentialLock(identity, 'refresh', () => new Promise((resolve) => { release = resolve; }));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await assert.rejects(two.withCredentialLock(identity, 'refresh', async () => {}), (err) => err.code === 'credential_operation_busy');
+    release();
+    await hold;
+  });
+
   it('refuses a simultaneous lock attempt from a second Node process', async () => {
     const root = makeRoot();
     const worker = path.join(__dirname, 'helpers', 'credential-lock-worker.js');
