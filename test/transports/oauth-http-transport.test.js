@@ -134,11 +134,12 @@ describe('OAuthHttpTransport — pre-expiry refresh (H.2.1, 300s window)', () =>
   });
 });
 
-describe('OAuthHttpTransport — #90 opt-in sliding renewal (guardrail 1: no new write path for flag-off)', () => {
+describe('OAuthHttpTransport — accepted refresh persistence', () => {
   async function refreshOnce(siteOverrides) {
     const server = await new MockAuthServer().start();
     server.config.tokenJson = {
-      access_token: 'AT-NEW', refresh_token: 'RT-NEW', token_type: 'Bearer', expires_in: 3600,
+      access_token: 'AT-NEW', refresh_token: 'RT-NEW', token_type: 'Bearer',
+      expires_in: 3600, refresh_token_timeout: 7200,
     };
     const resource = await new MockMcpResource({ acceptedTokens: ['AT-NEW'] }).start();
     const store = new MemorySecretStore();
@@ -166,19 +167,19 @@ describe('OAuthHttpTransport — #90 opt-in sliding renewal (guardrail 1: no new
     } finally { await server.stop(); await resource.stop(); }
   }
 
-  it('flag OFF (absent / false / non-true) — successful refresh does NOT invoke onTokensRenewed (no new write path)', async () => {
-    assert.deepEqual(await refreshOnce({}), [], 'flag absent → callback never fires');
-    assert.deepEqual(await refreshOnce({ slidingRenewal: false }), [], 'flag false → callback never fires');
-    assert.deepEqual(await refreshOnce({ slidingRenewal: 1 }), [], 'truthy-but-not-true → still default, callback never fires');
+  it('persists every accepted refresh regardless of the historical sliding flag', async () => {
+    assert.equal((await refreshOnce({})).length, 1, 'flag absent persists');
+    assert.equal((await refreshOnce({ slidingRenewal: false })).length, 1, 'flag false persists');
+    assert.equal((await refreshOnce({ slidingRenewal: 1 })).length, 1, 'non-true value persists');
   });
 
-  it('flag ON — successful refresh invokes onTokensRenewed once with the slid expiry + rotated refs', async () => {
+  it('carries authoritative expiry metadata and rotated refs', async () => {
     const renewed = await refreshOnce({ slidingRenewal: true });
     assert.equal(renewed.length, 1, 'callback fired exactly once on the successful refresh');
     const ua = renewed[0];
     assert.equal(ua.authStatus, 'active');
-    assert.ok(Date.parse(ua.refreshTokenExpiresAt) > Date.now() + 80 * 24 * 3600 * 1000,
-      'slid forward ~90d (adapter REFRESH_TTL mirror)');
+    assert.ok(Date.parse(ua.refreshTokenExpiresAt) > Date.now() + 7000 * 1000,
+      'uses the server-provided refresh timeout');
     assert.ok(ua.accessTokenRef && ua.refreshTokenRef, 'rotated refs carried for persistence');
   });
 });
