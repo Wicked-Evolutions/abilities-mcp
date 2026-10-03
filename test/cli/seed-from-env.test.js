@@ -12,6 +12,8 @@ const { SECRET_SERVICE } = require('../../lib/auth/token-manager');
 const { validate, SCHEMA_VERSION } = require('../../lib/auth/schema-v2');
 const { validateSiteConfig } = require('../../lib/config');
 
+const itPosix = process.platform === 'win32' ? it.skip : it;
+
 const tmpDirs = [];
 after(() => {
   for (const d of tmpDirs) {
@@ -190,17 +192,48 @@ describe('seedFromEnvIfMissing — guards', () => {
     assert.equal(found, null);
   });
 
-  it('retains the referenced secret when rename commits but directory fsync fails', async () => {
+  it('retains the referenced secret when rename commits but completion reports an error', async () => {
+    const dir = freshTmpDir();
+    const configPath = path.join(dir, 'wp-sites.json');
+    const store = new MemorySecretStore();
+    const originalRename = fs.promises.rename;
+    let injectedAfterRename = false;
+    fs.promises.rename = async function patchedRename(source, target) {
+      await originalRename.call(this, source, target);
+      if (path.basename(target) === path.basename(configPath)) {
+        injectedAfterRename = true;
+        throw new Error('synthetic ambiguous completion failure after rename');
+      }
+    };
+    try {
+      const result = await seedFromEnvIfMissing(configPath, defaultEnv(), { secretStore: store });
+      assert.equal(result.seeded, false);
+      assert.equal(result.reason, 'error');
+      assert.equal(injectedAfterRename, true, 'the post-rename fault must be injected');
+      assert.equal(fs.existsSync(configPath), true, 'rename committed the config before completion failed');
+      assert.equal(
+        await store.get(SECRET_SERVICE, 'wickedevolutions/apppassword'),
+        'app pwd 1234',
+        'referenced secret must survive an ambiguous post-rename failure'
+      );
+    } finally {
+      fs.promises.rename = originalRename;
+    }
+  });
+
+  itPosix('retains the referenced secret when POSIX directory fsync fails after rename', async () => {
     const dir = freshTmpDir();
     const configPath = path.join(dir, 'wp-sites.json');
     const canonicalDir = fs.realpathSync(dir);
     const store = new MemorySecretStore();
     const originalOpen = fs.promises.open;
+    let injectedDirectoryFsync = false;
     fs.promises.open = async function patchedOpen(target, flags, ...rest) {
       const handle = await originalOpen.call(this, target, flags, ...rest);
       if (target === canonicalDir && flags === 'r') {
+        injectedDirectoryFsync = true;
         return Object.assign(handle, {
-          sync: async () => { throw new Error('synthetic directory fsync failure after rename'); },
+          sync: async () => { throw new Error('synthetic POSIX directory fsync failure after rename'); },
         });
       }
       return handle;
@@ -209,12 +242,9 @@ describe('seedFromEnvIfMissing — guards', () => {
       const result = await seedFromEnvIfMissing(configPath, defaultEnv(), { secretStore: store });
       assert.equal(result.seeded, false);
       assert.equal(result.reason, 'error');
-      assert.equal(fs.existsSync(configPath), true, 'rename committed the config before fsync failed');
-      assert.equal(
-        await store.get(SECRET_SERVICE, 'wickedevolutions/apppassword'),
-        'app pwd 1234',
-        'referenced secret must survive an ambiguous post-rename failure'
-      );
+      assert.equal(injectedDirectoryFsync, true, 'the POSIX directory fsync fault must be injected');
+      assert.equal(fs.existsSync(configPath), true);
+      assert.equal(await store.get(SECRET_SERVICE, 'wickedevolutions/apppassword'), 'app pwd 1234');
     } finally {
       fs.promises.open = originalOpen;
     }
