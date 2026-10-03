@@ -189,6 +189,35 @@ describe('seedFromEnvIfMissing — guards', () => {
     const found = await store.get(SECRET_SERVICE, 'wickedevolutions/apppassword');
     assert.equal(found, null);
   });
+
+  it('retains the referenced secret when rename commits but directory fsync fails', async () => {
+    const dir = freshTmpDir();
+    const configPath = path.join(dir, 'wp-sites.json');
+    const store = new MemorySecretStore();
+    const originalOpen = fs.promises.open;
+    fs.promises.open = async function patchedOpen(target, flags, ...rest) {
+      const handle = await originalOpen.call(this, target, flags, ...rest);
+      if (target === dir && flags === 'r') {
+        return Object.assign(handle, {
+          sync: async () => { throw new Error('synthetic directory fsync failure after rename'); },
+        });
+      }
+      return handle;
+    };
+    try {
+      const result = await seedFromEnvIfMissing(configPath, defaultEnv(), { secretStore: store });
+      assert.equal(result.seeded, false);
+      assert.equal(result.reason, 'error');
+      assert.equal(fs.existsSync(configPath), true, 'rename committed the config before fsync failed');
+      assert.equal(
+        await store.get(SECRET_SERVICE, 'wickedevolutions/apppassword'),
+        'app pwd 1234',
+        'referenced secret must survive an ambiguous post-rename failure'
+      );
+    } finally {
+      fs.promises.open = originalOpen;
+    }
+  });
 });
 
 describe('deriveSiteId', () => {

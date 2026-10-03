@@ -7,6 +7,7 @@ const { MockAuthServer } = require('../auth/helpers/mock-auth-server');
 const { makeHarness, v2SiteOAuth, v2SiteAppPassword } = require('./helpers/cli-harness');
 const { SCHEMA_VERSION } = require('../../lib/auth/schema-v2');
 const { makeRef } = require('../../lib/auth/secret-store');
+const { CredentialCoordinator } = require('../../lib/auth/credential-coordinator');
 
 describe('CLI revoke', () => {
   let server;
@@ -47,6 +48,25 @@ describe('CLI revoke', () => {
     // Config marked revoked.
     const cfg = h.readConfig();
     assert.equal(cfg.sites.mock.auth_status, 'revoked');
+  });
+
+  it('refuses a duplicate credential owner before remote revoke or secret deletion', async () => {
+    const configured = h.readConfig().sites.mock;
+    const identity = CredentialCoordinator.identityForAuth(configured.auth);
+    const other = new CredentialCoordinator({
+      secretStore: h.ctx.secretStore,
+      configPath: `${h.configPath}.duplicate`,
+      siteId: 'duplicate',
+      deps: { stateRoot: h.ctx.deps.oauthCoordinationStateRoot },
+    });
+    await other.claimOwnership(identity, 'duplicate');
+    server.events.length = 0;
+
+    const r = await h.runCli('revoke', ['mock']);
+    assert.notEqual(r.exitCode, 0);
+    assert.equal(server.events.filter((event) => event.pathname === '/oauth/revoke').length, 0);
+    assert.equal(await h.ctx.secretStore.get('abilities-mcp', 'mock/access'), 'AT-MOCK');
+    assert.equal(await h.ctx.secretStore.get('abilities-mcp', 'mock/refresh'), 'RT-MOCK');
   });
 
   it('errors on apppassword sites', async () => {
