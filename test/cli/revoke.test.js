@@ -8,6 +8,7 @@ const { makeHarness, v2SiteOAuth, v2SiteAppPassword } = require('./helpers/cli-h
 const { SCHEMA_VERSION } = require('../../lib/auth/schema-v2');
 const { makeRef } = require('../../lib/auth/secret-store');
 const { CredentialCoordinator } = require('../../lib/auth/credential-coordinator');
+const { TokenManager } = require('../../lib/auth/token-manager');
 
 describe('CLI revoke', () => {
   let server;
@@ -67,6 +68,70 @@ describe('CLI revoke', () => {
     assert.equal(server.events.filter((event) => event.pathname === '/oauth/revoke').length, 0);
     assert.equal(await h.ctx.secretStore.get('abilities-mcp', 'mock/access'), 'AT-MOCK');
     assert.equal(await h.ctx.secretStore.get('abilities-mcp', 'mock/refresh'), 'RT-MOCK');
+  });
+
+  it('recovers a complete prepared refresh and revokes its replacement pair before slot cleanup', async () => {
+    const coordinator = new CredentialCoordinator({
+      secretStore: h.ctx.secretStore, configPath: h.configPath, siteId: 'mock',
+      deps: { stateRoot: h.ctx.deps.oauthCoordinationStateRoot },
+    });
+    const config = h.readConfig();
+    const identity = CredentialCoordinator.identityForAuth(config.sites.mock.auth);
+    const committed = await coordinator.preparePair({
+      credentialIdentity: identity,
+      auth: config.sites.mock.auth,
+      tokens: { access_token: 'AT-COMMITTED', refresh_token: 'RT-COMMITTED' },
+      accessTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 7200_000).toISOString(),
+    });
+    Object.assign(config.sites.mock.auth, committed);
+    const prepared = await coordinator.preparePair({
+      credentialIdentity: identity,
+      auth: committed,
+      generation: 'prepared-generation-123456',
+      slot: committed.credential_pair_slot === 'a' ? 'b' : 'a',
+      tokens: { access_token: 'AT-PREPARED', refresh_token: 'RT-PREPARED' },
+      accessTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 7200_000).toISOString(),
+    });
+    config.sites.mock.auth.refresh_attempt = {
+      nonce: 'prepared-refresh-nonce',
+      base_generation: committed.credential_generation,
+      credential_identity: identity,
+      credential_pair_slot: prepared.credential_pair_slot,
+      credential_pair_ref: prepared.credential_pair_ref,
+      credential_generation: prepared.credential_generation,
+      request_started_at: new Date().toISOString(),
+      recovery_deadline_at: new Date(Date.now() + 20_000).toISOString(),
+      attempt_count: 1,
+      prepared_metadata: {
+        access_token_expires_at: prepared.access_token_expires_at,
+        refresh_token_expires_at: prepared.refresh_token_expires_at,
+        authorization_expires_at: null,
+        next_refresh_at: prepared.next_refresh_at,
+        refresh_expiry_source: 'authoritative',
+      },
+    };
+    h.writeConfig(config);
+
+    const calls = [];
+    const originalRevoke = TokenManager.prototype.revoke;
+    TokenManager.prototype.revoke = async function revokeReplacement(args) {
+      calls.push(args);
+      return { statusCode: 200 };
+    };
+    try {
+      const r = await h.runCli('revoke', ['mock']);
+      assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+    } finally {
+      TokenManager.prototype.revoke = originalRevoke;
+    }
+
+    assert.deepEqual(calls.map((call) => call.token), ['RT-PREPARED', 'AT-PREPARED']);
+    const after = h.readConfig().sites.mock;
+    assert.equal(after.auth_status, 'revoked');
+    assert.equal(after.auth.refresh_attempt, undefined);
+    assert.equal(await h.ctx.secretStore.get('abilities-mcp', new URL(prepared.credential_pair_ref).pathname.slice(1)), null);
   });
 
   it('errors on apppassword sites', async () => {
