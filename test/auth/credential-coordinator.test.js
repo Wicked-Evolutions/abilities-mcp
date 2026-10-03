@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const http = require('node:http');
 
 const { CredentialCoordinator } = require('../../lib/auth/credential-coordinator');
 const { TokenManager } = require('../../lib/auth/token-manager');
@@ -385,6 +386,62 @@ describe('CredentialCoordinator', () => {
     assert.equal(snapshot.credentialGeneration, newPair.credential_generation);
     assert.equal(snapshot.siteUrl, 'https://reauthorized.example.test');
     assert.equal(snapshot.mcpResource, 'https://reauthorized.example.test/wp-json/mcp/renewed');
+  });
+
+  it('does not send a due externally adopted pair to the old token endpoint', async () => {
+    const root = makeRoot();
+    const store = new MemorySecretStore();
+    const seed = new CredentialCoordinator({ secretStore: store, deps: { stateRoot: root } });
+    const identity = 'f'.repeat(64);
+    const oldPair = await seed.preparePair({
+      credentialIdentity: identity, auth: { credential_pair_slot: 'b' },
+      tokens: { access_token: 'AT-old', refresh_token: 'RT-old' },
+      accessTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    });
+    const newPair = await seed.preparePair({
+      credentialIdentity: identity, auth: oldPair,
+      tokens: { access_token: 'AT-new', refresh_token: 'RT-new' },
+      accessTokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
+      refreshTokenExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    });
+    const configPath = writeConfig(root, 'site', {
+      method: 'oauth', client_id: 'old-client', ...oldPair,
+    });
+    let obsoleteEndpointRequests = 0;
+    const obsoleteServer = http.createServer((_req, res) => {
+      obsoleteEndpointRequests += 1;
+      res.writeHead(500).end();
+    });
+    await new Promise((resolve, reject) => {
+      obsoleteServer.once('error', reject);
+      obsoleteServer.listen(0, '127.0.0.1', resolve);
+    });
+    const oldSiteUrl = `http://127.0.0.1:${obsoleteServer.address().port}`;
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      config.sites.site.url = 'https://reauthorized.example.test';
+      config.sites.site.mcp_resource = 'https://reauthorized.example.test/wp-json/mcp/renewed';
+      Object.assign(config.sites.site.auth, { client_id: 'new-client', ...newPair });
+      fs.writeFileSync(configPath, JSON.stringify(config));
+      const coordinator = new CredentialCoordinator({ secretStore: store, configPath, siteId: 'site', deps: { stateRoot: root } });
+      const tm = new TokenManager({ secretStore: store, allowInsecure: true, credentialCoordinator: coordinator });
+      const cached = {
+        siteId: 'site', siteUrl: oldSiteUrl, tokenEndpoint: `${oldSiteUrl}/oauth/token`,
+        clientId: 'old-client', ...oldPair,
+      };
+
+      await assert.rejects(
+        () => tm.getAccessToken(cached),
+        (err) => err.code === 'token_endpoint_rediscovery_required'
+      );
+      await assert.rejects(
+        () => tm.refresh(cached),
+        (err) => err.code === 'token_endpoint_rediscovery_required'
+      );
+      assert.equal(obsoleteEndpointRequests, 0);
+    } finally {
+      await new Promise((resolve) => obsoleteServer.close(resolve));
+    }
   });
 
   it('adopts a distinct reauthorization identity even when the cached legacy identity was refused elsewhere', async () => {

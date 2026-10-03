@@ -232,6 +232,13 @@ writers use the same fence and cannot overwrite credential, client-ID,
 resource, or generation fields. The pool rebuilds only the affected OAuth
 transport from the current client ID, refs, expiry, and resource metadata.
 
+If external reauthorization repoints a site's URL, its previously discovered
+token endpoint is not trusted for the newly adopted refresh token. A due or
+forced refresh fails closed with `token_endpoint_rediscovery_required` before
+reading or sending that token. Restarting the bridge or re-running the CLI
+performs discovery for the current site URL; ordinary renewal and
+reauthorization on an unchanged site remain automatic.
+
 `reauth` holds a visible per-site authorization lock while browser consent is
 in progress, but takes the short global commit lock only for final commit; it
 never holds a whole-config lock while waiting for the browser. A request that
