@@ -206,6 +206,43 @@ describe('CredentialCoordinator', () => {
     assert.equal(fs.existsSync(path.join(lock, 'owner.json')), true, 'recovery never deletes an ambiguous lock');
   });
 
+  it('uses one config-commit lock when a first config file is named through a symlinked parent', async (t) => {
+    const root = makeRoot();
+    const realParent = path.join(root, 'real');
+    const aliasParent = path.join(root, 'alias');
+    fs.mkdirSync(realParent, { recursive: true });
+    try {
+      fs.symlinkSync(realParent, aliasParent, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (err) {
+      if (err.code === 'EPERM') {
+        t.skip('this Windows host does not permit test directory links');
+        return;
+      }
+      throw err;
+    }
+    const aliasFile = path.join(aliasParent, 'wp-sites.json');
+    const realFile = path.join(realParent, 'wp-sites.json');
+    const first = new CredentialCoordinator({ secretStore: new MemorySecretStore(), configPath: aliasFile, siteId: 'site' });
+    const second = new CredentialCoordinator({ secretStore: new MemorySecretStore(), configPath: realFile, siteId: 'site' });
+    const entered = deferred();
+    const release = deferred();
+    const held = first.withConfigCommitLock('first-create', async ({ config, existed }) => {
+      assert.equal(existed, false);
+      config.sites = {};
+      entered.resolve();
+      await release.promise;
+      return { write: true };
+    }, { initialConfig: () => ({ schema_version: 2, sites: {} }) });
+    await entered.promise;
+    await assert.rejects(
+      second.withConfigCommitLock('competing-first-create', async () => ({ write: false })),
+      (err) => err.code === 'credential_operation_busy'
+    );
+    release.resolve();
+    await held;
+    assert.equal(fs.existsSync(realFile), true);
+  });
+
   it('refuses a simultaneous lock attempt from a second Node process', async () => {
     const root = makeRoot();
     const worker = path.join(__dirname, 'helpers', 'credential-lock-worker.js');
