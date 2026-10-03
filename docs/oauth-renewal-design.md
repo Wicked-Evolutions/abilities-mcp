@@ -180,14 +180,21 @@ participates: runtime refresh/status changes, `add-site`, `reauth`,
 writer rereads and validates current config under the global lock, applies only
 its narrow change, then publishes it with the generation fence.
 
-A stale lock may be reclaimed only after a bounded age and a same-host
-dead-owner check. If a recorded owner might still be alive, including a paused
-process with an old heartbeat or an ambiguous Windows/PID-reuse result, it is
-never stolen; callers receive a typed busy state. The owner nonce and process
-identity are verified before commit. If the lock cannot be safely created,
-verified, or reclaimed, the bridge returns a typed coordination failure; it
-never proceeds concurrently. This does not claim distributed-lock safety on a
-network filesystem.
+A lock with a readable owner is reclaimed immediately only when the same-host
+PID check confirms that owner is dead. A live, paused, PID-reused, unreadable,
+or otherwise ambiguous owner is never stolen; callers receive a typed busy or
+interrupted-recovery state. A reclaimer creates `reclaim.<observed-owner-nonce>`
+inside the still-existing lock directory, rereads the exact owner, then alone
+may move the dead directory aside and replace it. Reclaimers that observed an
+older owner cannot delete a successor that acquired the briefly absent path.
+The owner nonce is verified again before config publication. If a process
+crashes while creating a lock or reclaiming one, the bridge fails closed with
+`credential_recovery_interrupted`: after stopping **all** participating bridge
+processes, an operator may remove only the affected coordination-lock directory
+from the local bridge state directory and retry. This never removes a keychain
+pair or configuration file, and it is an exceptional lock recovery path, not
+routine reauthorization. The bridge does not claim distributed-lock safety on
+a network filesystem.
 
 Before any server refresh, the coordinator stores a non-secret
 `refresh_attempt` marker under the global lock **before the first HTTP send**:

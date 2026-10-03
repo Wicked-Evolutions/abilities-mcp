@@ -42,6 +42,12 @@ function legacyAuth() {
   };
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
 describe('CredentialCoordinator', () => {
   it('stores a complete generation-addressed pair in one keychain item', async () => {
     const store = new MemorySecretStore();
@@ -125,12 +131,79 @@ describe('CredentialCoordinator', () => {
     fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ nonce: 'dead', pid: 99999999 }), { mode: 0o600 });
     const one = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
     const two = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
-    let release;
-    const hold = one.withCredentialLock(identity, 'refresh', () => new Promise((resolve) => { release = resolve; }));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    const entered = deferred();
+    const release = deferred();
+    const hold = one.withCredentialLock(identity, 'refresh', async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
     await assert.rejects(two.withCredentialLock(identity, 'refresh', async () => {}), (err) => err.code === 'credential_operation_busy');
-    release();
+    release.resolve();
     await hold;
+  });
+
+  it('never lets a reclaimer that observed a dead owner remove a later normal owner', async () => {
+    const root = makeRoot();
+    const identity = 'e'.repeat(64);
+    const lock = path.join(root, `${require('node:crypto').createHash('sha256').update(identity).digest('hex')}.credential.lock`);
+    fs.mkdirSync(lock, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ nonce: 'dead', pid: 99999999 }), { mode: 0o600 });
+
+    const observedDead = deferred();
+    const allowLateReclaimer = deferred();
+    const movedDeadLock = deferred();
+    const allowReplacement = deferred();
+    const b = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterDeadOwnerRead: async () => { observedDead.resolve(); await allowLateReclaimer.promise; },
+      } },
+    });
+    const a = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterDeadOwnerMoved: async () => { movedDeadLock.resolve(); await allowReplacement.promise; },
+      } },
+    });
+    const c = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+
+    const bAttempt = b.withCredentialLock(identity, 'refresh', async () => {});
+    await observedDead.promise;
+    const aAttempt = a.withCredentialLock(identity, 'refresh', async () => {});
+    await movedDeadLock.promise;
+
+    const cEntered = deferred();
+    const releaseC = deferred();
+    const cAttempt = c.withCredentialLock(identity, 'refresh', async (owner) => {
+      cEntered.resolve(owner);
+      await releaseC.promise;
+    });
+    const cOwner = await cEntered.promise;
+    allowReplacement.resolve();
+    await assert.rejects(aAttempt, (err) => err.code === 'credential_recovery_interrupted');
+
+    allowLateReclaimer.resolve();
+    await assert.rejects(bAttempt, (err) => err.code === 'credential_operation_busy');
+    const liveOwner = JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'));
+    assert.equal(liveOwner.nonce, cOwner.nonce, 'the late reclaimer did not remove C\'s successor lock');
+    releaseC.resolve();
+    await cAttempt;
+  });
+
+  it('fails closed when a prior dead-owner reclaim claim is interrupted', async () => {
+    const root = makeRoot();
+    const coordinator = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const identity = 'f'.repeat(64);
+    const lock = path.join(root, `${require('node:crypto').createHash('sha256').update(identity).digest('hex')}.credential.lock`);
+    fs.mkdirSync(path.join(lock, 'reclaim.dead'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ nonce: 'dead', pid: 99999999 }), { mode: 0o600 });
+
+    await assert.rejects(
+      coordinator.withCredentialLock(identity, 'refresh', async () => {}),
+      (err) => err.code === 'credential_recovery_interrupted' && /Stop all bridge processes/.test(err.message)
+    );
+    assert.equal(fs.existsSync(path.join(lock, 'owner.json')), true, 'recovery never deletes an ambiguous lock');
   });
 
   it('refuses a simultaneous lock attempt from a second Node process', async () => {
