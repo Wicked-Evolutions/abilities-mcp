@@ -53,6 +53,33 @@ describe('CLI test (ping + scope summary)', () => {
     assert.match(r.lines.join('\n'), /Granted scopes:/);
   });
 
+  it('uses an externally reauthorized MCP resource with the adopted bearer', async () => {
+    seed();
+    const reauthorizedUrl = 'https://reauthorized.example.test';
+    const reauthorizedResource = `${reauthorizedUrl}/wp-json/mcp/renewed`;
+    let seenUrl = null;
+    const r = await h.runCli('test', ['mock'], {
+      discover: async () => {
+        const config = h.readConfig();
+        config.sites.mock.url = reauthorizedUrl;
+        config.sites.mock.mcp_resource = reauthorizedResource;
+        h.writeConfig(config);
+        return {
+          asMetadata: { token_endpoint: `${server.origin}/oauth/token` },
+          prMetadata: { resource: 'https://stale.example.test/wp-json/mcp/stale' },
+        };
+      },
+      request: async ({ url, headers }) => {
+        seenUrl = url;
+        assert.equal(headers.Authorization, 'Bearer AT-MOCK');
+        return { statusCode: 200, headers: {}, body: '{}', json: { ok: true } };
+      },
+    });
+
+    assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+    assert.equal(seenUrl, reauthorizedResource);
+  });
+
   it('refreshes within window and persists new expiry', async () => {
     // Seed with an expired access token so getAccessToken refreshes.
     const past = new Date(Date.now() - 1000).toISOString();

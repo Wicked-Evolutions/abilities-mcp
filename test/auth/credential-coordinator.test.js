@@ -368,6 +368,8 @@ describe('CredentialCoordinator', () => {
     const newPair = await first.preparePair({ credentialIdentity: oldPair.credential_identity, auth: oldPair,
       tokens: { access_token: 'AT-new', refresh_token: 'RT-new' }, accessTokenExpiresAt: '2026-10-05T00:00:00.000Z' });
     const disk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    disk.sites.site.url = 'https://reauthorized.example.test';
+    disk.sites.site.mcp_resource = 'https://reauthorized.example.test/wp-json/mcp/renewed';
     Object.assign(disk.sites.site.auth, {
       client_id: 'new-client', credential_pair_ref: newPair.credential_pair_ref,
       credential_generation: newPair.credential_generation, credential_pair_slot: newPair.credential_pair_slot,
@@ -381,6 +383,8 @@ describe('CredentialCoordinator', () => {
     assert.equal(snapshot.clientId, 'new-client');
     assert.equal(snapshot._accessToken, 'AT-new');
     assert.equal(snapshot.credentialGeneration, newPair.credential_generation);
+    assert.equal(snapshot.siteUrl, 'https://reauthorized.example.test');
+    assert.equal(snapshot.mcpResource, 'https://reauthorized.example.test/wp-json/mcp/renewed');
   });
 
   it('adopts a distinct reauthorization identity even when the cached legacy identity was refused elsewhere', async () => {

@@ -85,6 +85,30 @@ describe('CLI self-check (H.2.6)', () => {
     assert.equal(r.exitCode, 0);
   });
 
+  it('uses the externally reauthorized site URL with the adopted bearer', async () => {
+    const reauthorizedUrl = 'https://reauthorized.example.test';
+    let seenUrl = null;
+    const r = await h.runCli('self-check', ['mock'], {
+      discover: async () => {
+        const config = h.readConfig();
+        config.sites.mock.url = reauthorizedUrl;
+        h.writeConfig(config);
+        return { asMetadata: { token_endpoint: `${server.origin}/oauth/token` } };
+      },
+      request: async ({ url, headers }) => {
+        seenUrl = url;
+        assert.equal(headers.Authorization, 'Bearer AT-MOCK');
+        return {
+          statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{}',
+          json: { authorization_present: true },
+        };
+      },
+    });
+
+    assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+    assert.equal(seenUrl, `${reauthorizedUrl}${'/wp-json/abilities-mcp-adapter/v1/oauth/echo-headers'}`);
+  });
+
   it('reports ⚠ + recovery hints when header is missing — exits non-zero', async () => {
     const fakeRequest = async () => ({
       statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{}',
