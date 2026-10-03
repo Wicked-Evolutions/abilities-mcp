@@ -112,6 +112,56 @@ describe('CredentialCoordinator', () => {
     await held;
   });
 
+  it('waits for a live initializer to record its owner instead of declaring interrupted recovery', async () => {
+    const root = makeRoot();
+    const identity = 'b'.repeat(64);
+    const directoryCreated = deferred();
+    const allowOwnerWrite = deferred();
+    const ownerlessObserved = deferred();
+    const entered = deferred();
+    const release = deferred();
+    const first = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterLockDirectoryCreated: async () => {
+          directoryCreated.resolve();
+          await allowOwnerWrite.promise;
+        },
+      } },
+    });
+    const second = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        ownerlessLockObserved: async () => ownerlessObserved.resolve(),
+      } },
+    });
+    const firstAttempt = first.withCredentialLock(identity, 'refresh', async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await directoryCreated.promise;
+    const secondAttempt = second.withCredentialLock(identity, 'refresh', async () => {});
+    await ownerlessObserved.promise;
+    allowOwnerWrite.resolve();
+    await entered.promise;
+    await assert.rejects(secondAttempt, (err) => err.code === 'credential_operation_busy');
+    release.resolve();
+    await firstAttempt;
+  });
+
+  it('retains a persistently ownerless lock for explicit stopped-process recovery', async () => {
+    const root = makeRoot();
+    const coordinator = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const identity = 'c'.repeat(64);
+    const lock = path.join(root, `${require('node:crypto').createHash('sha256').update(identity).digest('hex')}.credential.lock`);
+    fs.mkdirSync(lock, { recursive: true, mode: 0o700 });
+    await assert.rejects(
+      coordinator.withCredentialLock(identity, 'refresh', async () => {}),
+      (err) => err.code === 'credential_recovery_interrupted'
+    );
+    assert.equal(fs.existsSync(lock), true, 'bounded ownerless retry never deletes an ambiguous lock');
+  });
+
   it('reclaims a confirmed-dead lock without waiting past the refresh recovery budget', async () => {
     const root = makeRoot();
     const coordinator = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
