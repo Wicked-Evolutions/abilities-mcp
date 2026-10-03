@@ -149,6 +149,39 @@ describe('CredentialCoordinator', () => {
     await firstAttempt;
   });
 
+  it('reacquires when the initializer finishes and removes its lock during the ownerless wait', async () => {
+    const root = makeRoot();
+    const identity = 'c'.repeat(64);
+    const directoryCreated = deferred();
+    const allowOwnerWrite = deferred();
+    const first = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterLockDirectoryCreated: async () => {
+          directoryCreated.resolve();
+          await allowOwnerWrite.promise;
+        },
+      } },
+    });
+    let firstAttempt;
+    const second = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        ownerlessLockObserved: async () => {
+          // Complete the first owner's whole operation before this contender
+          // re-reads owner.json, reproducing mkdir->owner->remove in one gap.
+          allowOwnerWrite.resolve();
+          await firstAttempt;
+        },
+      } },
+    });
+    firstAttempt = first.withCredentialLock(identity, 'refresh', async () => {});
+    await directoryCreated.promise;
+    let secondEntered = false;
+    await second.withCredentialLock(identity, 'refresh', async () => { secondEntered = true; });
+    assert.equal(secondEntered, true, 'the missing canonical lock is acquired afresh');
+  });
+
   it('retains a persistently ownerless lock for explicit stopped-process recovery', async () => {
     const root = makeRoot();
     const coordinator = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
