@@ -107,12 +107,36 @@ describe('CLI upgrade-auth (Appendix F.5)', () => {
   it('reverts on Step 3 ping failure and surfaces "✗ OAuth test failed — reverting." (binding wording)', async () => {
     const fakeRequest = async () => ({ statusCode: 401, headers: {}, body: '', json: null });
     const r = await h.runCli('upgrade-auth', ['siteX'], { request: fakeRequest });
-    assert.equal(r.exitCode, 4);
+    assert.equal(r.exitCode, 4, r.errLines.join('\n'));
     // Binding wording.
     assert.match(r.lines.join('\n'), /✗ OAuth test failed — reverting\./);
     const cfg = h.readConfig();
     // Reverted to apppassword.
     assert.equal(cfg.sites.siteX.auth.method, 'apppassword');
+  });
+
+  it('does not restore a fallback over a different OAuth identity published during validation', async () => {
+    const fakeRequest = async () => {
+      const concurrent = h.readConfig();
+      concurrent.sites.siteX.auth = {
+        ...concurrent.sites.siteX.auth,
+        client_id: 'other-client',
+        credential_identity: 'other-credential-identity',
+      };
+      h.writeConfig(concurrent);
+      return { statusCode: 401, headers: {}, body: '', json: null };
+    };
+
+    const r = await h.runCli('upgrade-auth', ['siteX'], { request: fakeRequest });
+    assert.equal(r.exitCode, 2, r.errLines.join('\n'));
+    assert.match(
+      r.errLines.join('\n'),
+      /OAuth credentials for site "siteX" changed before its App Password fallback could be restored/
+    );
+    assert.doesNotMatch(r.lines.join('\n'), /✗ OAuth test failed — reverting\./);
+    const cfg = h.readConfig();
+    assert.equal(cfg.sites.siteX.auth.method, 'oauth');
+    assert.equal(cfg.sites.siteX.auth.client_id, 'other-client');
   });
 
   it('Step 1 pre-flight fails with binding wording when adapter has no OAuth', async () => {
