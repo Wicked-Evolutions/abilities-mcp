@@ -247,24 +247,37 @@ describe('CredentialCoordinator', () => {
     const root = makeRoot();
     const worker = path.join(__dirname, 'helpers', 'credential-lock-worker.js');
     const identity = 'b'.repeat(64);
-    const first = spawn(process.execPath, [worker, root, identity, '250']);
-    let firstOutput = '';
-    first.stdout.on('data', (chunk) => { firstOutput += chunk; });
-    await new Promise((resolve) => {
-      const timer = setInterval(() => {
-        if (firstOutput.includes('locked')) { clearInterval(timer); resolve(); }
-      }, 5);
-    });
-    const second = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [worker, root, identity, '0']);
+    const startWorker = (holdMode) => {
+      const child = spawn(process.execPath, [worker, root, identity, holdMode], { stdio: ['pipe', 'pipe', 'pipe'] });
       let output = '';
+      const closed = new Promise((resolve, reject) => {
+        child.on('error', reject);
+        child.on('close', (code) => resolve({ code, output }));
+      });
       child.stdout.on('data', (chunk) => { output += chunk; });
-      child.on('error', reject);
-      child.on('close', (code) => resolve({ code, output }));
-    });
-    assert.equal(second.code, 2);
-    assert.match(second.output, /error:credential_operation_busy/);
-    await new Promise((resolve, reject) => first.on('close', (code) => code === 0 ? resolve() : reject(new Error(String(code)))));
+      return { child, closed, output: () => output };
+    };
+    const waitFor = async (workerProcess, text) => {
+      const deadline = Date.now() + 5000;
+      while (!workerProcess.output().includes(text)) {
+        if (Date.now() >= deadline) throw new Error(`worker did not report ${text}`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+    const first = startWorker('stdin');
+    try {
+      await waitFor(first, 'locked');
+      const second = startWorker('release');
+      const secondResult = await second.closed;
+      assert.equal(secondResult.code, 2);
+      assert.match(secondResult.output, /error:credential_operation_busy/);
+      first.child.stdin.end('release\n');
+      const firstResult = await first.closed;
+      assert.equal(firstResult.code, 0);
+    } finally {
+      if (!first.child.killed) first.child.kill();
+      await first.closed.catch(() => {});
+    }
   });
 
   it('publishes a complete refreshed pair only after a durable attempt marker', async () => {

@@ -3,7 +3,7 @@
 const { CredentialCoordinator } = require('../../../lib/auth/credential-coordinator');
 const { MemorySecretStore } = require('../../../lib/auth/memory-secret-store');
 
-const [stateRoot, identity, holdMs] = process.argv.slice(2);
+const [stateRoot, identity, holdMode] = process.argv.slice(2);
 const coordinator = new CredentialCoordinator({
   secretStore: new MemorySecretStore(),
   deps: { stateRoot },
@@ -13,7 +13,10 @@ const coordinator = new CredentialCoordinator({
   try {
     await coordinator.withCredentialLock(identity, 'test', async () => {
       process.stdout.write('locked\n');
-      if (Number(holdMs) > 0) await new Promise((resolve) => setTimeout(resolve, Number(holdMs)));
+      if (holdMode === 'stdin') {
+        process.stdin.resume();
+        await new Promise((resolve) => process.stdin.once('data', resolve));
+      }
     });
     process.stdout.write('released\n');
   } catch (err) {
