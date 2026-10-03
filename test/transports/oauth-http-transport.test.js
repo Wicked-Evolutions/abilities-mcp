@@ -503,6 +503,44 @@ describe('OAuthHttpTransport — terminal 401 after refresh', () => {
       await t.shutdown(); await server.stop(); await resource.stop();
     }
   });
+
+  it('reports the failed generation when an external adoption races a refresh failure', async () => {
+    const originalAuth = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-failed',
+    });
+    let transport;
+    const failed = new Error('the old refresh was rejected');
+    failed.code = 'revoked';
+    failed.updatedAuth = {
+      ...originalAuth,
+      authStatus: 'revoked',
+      credentialGeneration: 'generation-failed',
+    };
+    const tokenManager = {
+      async getAccessToken() {
+        // Another request has already adopted a distinct pair before this
+        // failed refresh reports its terminal status.
+        transport._siteAuth = {
+          ...transport._siteAuth,
+          credentialGeneration: 'generation-current',
+        };
+        throw failed;
+      },
+    };
+    let observed = null;
+    transport = new OAuthHttpTransport({
+      endpoint: 'http://127.0.0.1:1/mcp', tokenManager, siteAuth: originalAuth,
+      onAuthStatusChange: (status, info) => { observed = { status, info }; },
+      logger: () => {},
+    });
+
+    await assert.rejects(
+      () => transport._postWithRetry('{"jsonrpc":"2.0"}', 0, false),
+      (err) => err.code === 'revoked'
+    );
+    assert.equal(observed.status, 'revoked');
+    assert.equal(observed.info.credentialGeneration, 'generation-failed');
+  });
 });
 
 describe('OAuthHttpTransport — surface compatibility with HttpTransport', () => {

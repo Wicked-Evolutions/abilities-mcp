@@ -77,6 +77,22 @@ describe('TokenManager authoritative expiry metadata', () => {
       (err) => err.code === 'malformed_expiry_metadata'
     );
   });
+
+  it('skips a near-deadline refresh only when the current access token already reaches that deadline', () => {
+    const now = Date.parse('2026-10-03T00:00:00.000Z');
+    const tm = new TokenManager({ secretStore: new MemorySecretStore(), deps: { now: () => now } });
+    const deadline = new Date(now + 60_000).toISOString();
+    assert.equal(tm._isWithinRefreshWindow({
+      nextRefreshAt: new Date(now - 1).toISOString(),
+      accessTokenExpiresAt: deadline,
+      authorizationExpiresAt: deadline,
+    }), false, 'a capped, still-usable access token is not pointlessly rotated');
+    assert.equal(tm._isWithinRefreshWindow({
+      nextRefreshAt: new Date(now - 1).toISOString(),
+      accessTokenExpiresAt: new Date(now + 20_000).toISOString(),
+      authorizationExpiresAt: deadline,
+    }), true, 'shorter usable access is refreshed because it can still reach the deadline');
+  });
 });
 
 describe('TokenManager.refresh — retry semantics', () => {
