@@ -375,6 +375,43 @@ describe('OAuthHttpTransport — 401 → forceRefresh → retry-once', () => {
       { bearer: 'AT-A', endpoint: authA.mcpResource, generation: 'generation-a', sessionId: null },
     ]);
   });
+
+  it('uses the new resource session established by its bounded re-handshake', async () => {
+    const base = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-old', mcpResource: 'http://127.0.0.1:1/old-resource',
+    });
+    const updated = { ...base, credentialGeneration: 'generation-new', mcpResource: 'http://127.0.0.1:1/new-resource' };
+    let reads = 0;
+    const t = new OAuthHttpTransport({
+      endpoint: base.mcpResource,
+      siteAuth: base,
+      logger: () => {},
+      tokenManager: {
+        async getAccessToken() {
+          reads += 1;
+          return reads === 1
+            ? { accessToken: 'AT-new', refreshed: false, updatedAuth: updated }
+            : { accessToken: 'AT-new', refreshed: false };
+        },
+      },
+    });
+    t.cachedInitRequest = { jsonrpc: '2.0', id: 'init', method: 'initialize', params: {} };
+    const sent = [];
+    t._post = async (body, _bearer, snapshot) => {
+      sent.push({ body, endpoint: snapshot.endpoint, sessionId: snapshot.sessionId });
+      return body.includes('"initialize"')
+        ? { statusCode: 200, body: '', sessionId: 'new-resource-session' }
+        : { statusCode: 200, body: '' };
+    };
+
+    await t._postWithRetry('{"request":"ordinary"}');
+
+    assert.equal(sent[0].endpoint, updated.mcpResource);
+    assert.equal(sent[0].sessionId, null, 'the re-handshake never sends the old resource session');
+    assert.deepEqual(sent[1], {
+      body: '{"request":"ordinary"}', endpoint: updated.mcpResource, sessionId: 'new-resource-session',
+    });
+  });
 });
 
 describe('OAuthHttpTransport — terminal 401 after refresh', () => {

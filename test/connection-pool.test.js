@@ -226,6 +226,36 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
   });
 });
 
+describe('ConnectionPool — OAuth status generation fence', () => {
+  it('does not let a delayed old-generation failure overwrite a newer authorization status', async () => {
+    const config = {
+      _configPath: '/test/wp-sites.json',
+      sites: {
+        network: {
+          auth: { credential_generation: 'generation-new' },
+          auth_status: 'active',
+        },
+      },
+    };
+    const coordinator = {
+      forSite(siteId) {
+        assert.equal(siteId, 'network', 'alias callbacks persist through the owning site key');
+        return {
+          async withConfigCommitLock(_operation, fn) {
+            return fn({ config });
+          },
+        };
+      },
+    };
+    const pool = new ConnectionPool(config, () => {}, { credentialCoordinator: coordinator });
+    await pool._defaultPersistAuthStatus('network', 'expired', 'generation-old');
+    assert.equal(config.sites.network.auth_status, 'active');
+
+    await pool._defaultPersistAuthStatus('network', 'expired', 'generation-new');
+    assert.equal(config.sites.network.auth_status, 'expired');
+  });
+});
+
 describe('ConnectionPool — _findExistingHttpTransport handles both transport variants', () => {
   it('dedupes OAuth sites by mcp_resource', async () => {
     const config = {
