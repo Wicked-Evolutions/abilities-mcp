@@ -243,6 +243,30 @@ describe('CredentialCoordinator', () => {
     assert.equal(fs.existsSync(realFile), true);
   });
 
+  it('serializes a site authorization operation and reports reauth_in_progress to runtime readers', async () => {
+    const root = makeRoot();
+    const configPath = writeConfig(root, 'site', legacyAuth());
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(), configPath, siteId: 'site', deps: { stateRoot: root },
+    });
+    const entered = deferred();
+    const release = deferred();
+    const authorization = coordinator.withAuthorizationLock('reauth', async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    await assert.rejects(
+      coordinator.readValidatedSnapshot({
+        siteId: 'site', accessTokenRef: makeRef('abilities-mcp', 'site/access'),
+        refreshTokenRef: makeRef('abilities-mcp', 'site/refresh'),
+      }),
+      (err) => err.code === 'reauth_in_progress'
+    );
+    release.resolve();
+    await authorization;
+  });
+
   it('refuses a simultaneous lock attempt from a second Node process', async () => {
     const root = makeRoot();
     const worker = path.join(__dirname, 'helpers', 'credential-lock-worker.js');

@@ -166,6 +166,10 @@ The registry cannot detect an already-running older bridge that does not take
 locks; the upgrade/restart boundary above remains required. Two local locks
 are needed because each configuration rewrite contains all sites:
 
+* A per-site authorization-operation lock, keyed by canonical config path and
+  owning site key, remains held across browser consent and final publication.
+  Runtime work sees `reauth_in_progress`; it never holds the whole-config lock
+  while a human is in the browser.
 * A per-credential operation lock serializes refresh and reauthorization for
   that canonical credential identity from start through outcome.
 * A short global config-commit lock serializes read-modify-validate-atomic
