@@ -193,11 +193,12 @@ describe('seedFromEnvIfMissing — guards', () => {
   it('retains the referenced secret when rename commits but directory fsync fails', async () => {
     const dir = freshTmpDir();
     const configPath = path.join(dir, 'wp-sites.json');
+    const canonicalDir = fs.realpathSync(dir);
     const store = new MemorySecretStore();
     const originalOpen = fs.promises.open;
     fs.promises.open = async function patchedOpen(target, flags, ...rest) {
       const handle = await originalOpen.call(this, target, flags, ...rest);
-      if (target === dir && flags === 'r') {
+      if (target === canonicalDir && flags === 'r') {
         return Object.assign(handle, {
           sync: async () => { throw new Error('synthetic directory fsync failure after rename'); },
         });
