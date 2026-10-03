@@ -2,6 +2,7 @@
 
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 
 const { MockAuthServer } = require('../auth/helpers/mock-auth-server');
 const { makeHarness, autoConsentDeps } = require('./helpers/cli-harness');
@@ -12,6 +13,12 @@ const {
 } = require('../../lib/cli/multisite-probe');
 const { SCHEMA_VERSION } = require('../../lib/auth/schema-v2');
 const { DEFAULT_SCOPE } = require('../../lib/auth/oauth-client');
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
 
 describe('CLI add-site', () => {
   describe('site-id derivation', () => {
@@ -115,6 +122,38 @@ describe('CLI add-site', () => {
       const account = new URL(cfg.sites.mock.auth.credential_pair_ref).pathname.slice(1);
       const pair = JSON.parse(await h.ctx.secretStore.get('abilities-mcp', account));
       assert.match(pair.access_token, /^at-/);
+    });
+
+    it('keeps a first-file OAuth consent fence site-local while another site is added', async () => {
+      const enteredConsent = deferred();
+      const releaseConsent = deferred();
+      const delayedConsent = {
+        openBrowser: async (url) => {
+          const authorize = new URL(url);
+          enteredConsent.resolve();
+          await releaseConsent.promise;
+          const callback = `${authorize.searchParams.get('redirect_uri')}?code=AUTOPASS&state=${encodeURIComponent(authorize.searchParams.get('state'))}`;
+          http.get(callback, (res) => res.resume()).on('error', () => {});
+          return { spawned: true, platform: 'test' };
+        },
+      };
+      const first = h.runCli('add-site', [server.siteUrl, '--site-id=first'], {
+        oauthClientDeps: delayedConsent,
+      });
+      await enteredConsent.promise;
+
+      const second = await h.runCli('add-site', [
+        'https://second.example', '--site-id=second', '--apppassword', '--username=wp_admin', '--password=second-password',
+      ]);
+      assert.equal(second.exitCode, 0, second.errLines.join('\n'));
+      assert.equal(h.readConfig().sites.second.auth.method, 'apppassword');
+
+      releaseConsent.resolve();
+      const completed = await first;
+      assert.equal(completed.exitCode, 0, completed.errLines.join('\n'));
+      const cfg = h.readConfig();
+      assert.equal(cfg.sites.first.auth.method, 'oauth');
+      assert.equal(cfg.sites.second.auth.method, 'apppassword');
     });
 
     it('emits state-machine progress lines', async () => {
