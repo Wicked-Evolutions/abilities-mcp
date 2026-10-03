@@ -66,6 +66,12 @@ function send(transport, line) {
   });
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
 describe('OAuthHttpTransport — bearer header construction', () => {
   it('attaches Authorization: Bearer <token> built from TokenManager', async () => {
     const { server, resource, tm, siteAuth } = await buildStack({ accessToken: 'AT-CACHED' });
@@ -279,6 +285,56 @@ describe('OAuthHttpTransport — 401 → forceRefresh → retry-once', () => {
       { bearer: 'AT-NEW', endpoint: newAuth.mcpResource, generation: 'generation-new' },
     ]);
     assert.equal(t._siteAuth.clientId, 'client-after-reauth');
+  });
+
+  it('uses the generation captured with each overlapping request when a late old 401 arrives', async () => {
+    const oldAuth = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-old', credentialIdentity: 'identity-old',
+      mcpResource: 'http://127.0.0.1:1/old-resource',
+    });
+    const newAuth = {
+      ...oldAuth,
+      credentialGeneration: 'generation-new', credentialIdentity: 'identity-new',
+      clientId: 'client-after-reauth', mcpResource: 'http://127.0.0.1:1/new-resource',
+    };
+    let tokenReads = 0;
+    const tokenManager = {
+      async getAccessToken(_auth, opts) {
+        tokenReads += 1;
+        assert.equal(opts.forceRefresh, false, 'the late old 401 never rotates the newer generation');
+        if (tokenReads === 1) return { accessToken: 'AT-OLD', refreshed: false };
+        if (tokenReads === 2) return { accessToken: 'AT-NEW', refreshed: false, updatedAuth: newAuth };
+        return { accessToken: 'AT-NEW', refreshed: false };
+      },
+    };
+    const t = new OAuthHttpTransport({ endpoint: oldAuth.mcpResource, tokenManager, siteAuth: oldAuth, logger: () => {} });
+    const oldSent = deferred();
+    const releaseOld401 = deferred();
+    const requests = [];
+    t._post = async (_body, bearer) => {
+      requests.push({ bearer, endpoint: t.endpoint, generation: t._siteAuth.credentialGeneration });
+      if (bearer === 'AT-OLD') {
+        oldSent.resolve();
+        await releaseOld401.promise;
+        return { statusCode: 401, body: '' };
+      }
+      return { statusCode: 200, body: '' };
+    };
+
+    const oldRequest = t._postWithRetry('{"request":"old"}');
+    await oldSent.promise;
+    const newRequest = await t._postWithRetry('{"request":"new"}');
+    assert.equal(newRequest.statusCode, 200);
+    releaseOld401.resolve();
+    const retriedOldRequest = await oldRequest;
+
+    assert.equal(retriedOldRequest.statusCode, 200);
+    assert.deepEqual(requests, [
+      { bearer: 'AT-OLD', endpoint: oldAuth.mcpResource, generation: 'generation-old' },
+      { bearer: 'AT-NEW', endpoint: newAuth.mcpResource, generation: 'generation-new' },
+      { bearer: 'AT-NEW', endpoint: newAuth.mcpResource, generation: 'generation-new' },
+    ]);
+    assert.equal(tokenReads, 3, 'the stale request retried the adopted snapshot without a reload or rotation');
   });
 });
 
