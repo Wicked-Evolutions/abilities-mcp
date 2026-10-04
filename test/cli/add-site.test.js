@@ -122,6 +122,16 @@ describe('CLI add-site', () => {
       const account = new URL(cfg.sites.mock.auth.credential_pair_ref).pathname.slice(1);
       const pair = JSON.parse(await h.ctx.secretStore.get('abilities-mcp', account));
       assert.match(pair.access_token, /^at-/);
+      assert.equal(cfg.sites.mock.allowInsecure, true,
+        'explicit loopback OAuth opt-in must persist for subsequent bridge startup');
+    });
+
+    it('refuses non-loopback HTTP OAuth even when insecure mode is requested', async () => {
+      const r = await h.runCli('add-site', ['http://example.com', '--site-id=remote-http']);
+      assert.equal(r.exitCode, 2);
+      assert.match(r.errLines.join('\n'), /only for localhost development/);
+      assert.throws(() => h.readConfig(), /ENOENT/,
+        'a rejected remote HTTP OAuth request must not create a configuration file');
     });
 
     it('keeps a first-file OAuth consent fence site-local while another site is added', async () => {
