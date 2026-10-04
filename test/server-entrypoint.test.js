@@ -20,7 +20,6 @@ function writeCapturePreload(filePath) {
   fs.writeFileSync(filePath, `
     const fs = require('node:fs');
     const Module = require('node:module');
-    const path = require('node:path');
     const originalLoad = Module._load;
     class ForbiddenKeychainSecretStore {
       async get() { throw new Error('test must not access the operator Keychain'); }
@@ -28,7 +27,7 @@ function writeCapturePreload(filePath) {
       async delete() { throw new Error('test must not access the operator Keychain'); }
     }
     Module._load = function(request, parent, isMain) {
-      if (request === './lib/auth/keychain-secret-store' && parent && parent.filename === process.env.ABILITIES_MCP_BRIDGE_BIN) {
+      if (request === './lib/auth/keychain-secret-store' || request === './keychain-secret-store') {
         return { KeychainSecretStore: ForbiddenKeychainSecretStore };
       }
       if (request === './lib/connection-pool' && parent && parent.filename === process.env.ABILITIES_MCP_BRIDGE_BIN) {
@@ -81,5 +80,33 @@ describe('server entrypoint', () => {
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.signal, null, result.stderr);
     assert.deepEqual(JSON.parse(await fsp.readFile(capturePath, 'utf8')), { allowInsecure: true });
+  });
+
+  it('recognizes the documented insecure CLI flag without allowing remote HTTP', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'abilities-mcp-cli-entry-'));
+    tempDirs.push(dir);
+    const preloadPath = path.join(dir, 'forbid-keychain.js');
+    const configPath = path.join(dir, 'wp-sites.json');
+    writeCapturePreload(preloadPath);
+
+    const commonArgs = [
+      '--require', preloadPath, BRIDGE_BIN, 'add-site', 'http://example.com',
+      '--site-id=remote-http', `--config=${configPath}`,
+    ];
+    const env = { ...process.env, ABILITIES_MCP_BRIDGE_BIN: BRIDGE_BIN };
+    const optIn = await runBridge([...commonArgs, '--allow-insecure'], env);
+    const absent = await runBridge(commonArgs, env);
+    const explicitFalse = await runBridge([...commonArgs, '--allow-insecure=false'], env);
+
+    assert.equal(optIn.code, 2, optIn.stderr);
+    assert.match(optIn.stderr, /only for localhost development/,
+      'the documented flag must reach the post-opt-in loopback guard');
+    for (const result of [absent, explicitFalse]) {
+      assert.equal(result.code, 2, result.stderr);
+      assert.match(result.stderr, /Provide an https:\/\/ URL or pass --allow-insecure/,
+        'an absent or false documented flag must not opt into HTTP');
+    }
+    assert.equal(fs.existsSync(configPath), false,
+      'rejected remote HTTP invocations must not create a config file');
   });
 });
