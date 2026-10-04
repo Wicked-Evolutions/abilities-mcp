@@ -7,6 +7,13 @@ const { MockAuthServer } = require('../auth/helpers/mock-auth-server');
 const { makeHarness, autoConsentDeps, v2SiteAppPassword } = require('./helpers/cli-harness');
 const { SCHEMA_VERSION } = require('../../lib/auth/schema-v2');
 const { makeRef } = require('../../lib/auth/secret-store');
+const { CredentialCoordinator } = require('../../lib/auth/credential-coordinator');
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
 
 describe('CLI upgrade-auth (Appendix F.5)', () => {
   let server;
@@ -107,12 +114,93 @@ describe('CLI upgrade-auth (Appendix F.5)', () => {
   it('reverts on Step 3 ping failure and surfaces "✗ OAuth test failed — reverting." (binding wording)', async () => {
     const fakeRequest = async () => ({ statusCode: 401, headers: {}, body: '', json: null });
     const r = await h.runCli('upgrade-auth', ['siteX'], { request: fakeRequest });
-    assert.equal(r.exitCode, 4);
+    assert.equal(r.exitCode, 4, r.errLines.join('\n'));
     // Binding wording.
     assert.match(r.lines.join('\n'), /✗ OAuth test failed — reverting\./);
     const cfg = h.readConfig();
     // Reverted to apppassword.
     assert.equal(cfg.sites.siteX.auth.method, 'apppassword');
+  });
+
+  it('does not restore a fallback over a different OAuth identity published during validation', async () => {
+    const fakeRequest = async () => {
+      const concurrent = h.readConfig();
+      concurrent.sites.siteX.auth = {
+        ...concurrent.sites.siteX.auth,
+        client_id: 'other-client',
+        credential_identity: 'other-credential-identity',
+      };
+      h.writeConfig(concurrent);
+      return { statusCode: 401, headers: {}, body: '', json: null };
+    };
+
+    const r = await h.runCli('upgrade-auth', ['siteX'], { request: fakeRequest });
+    assert.equal(r.exitCode, 2, r.errLines.join('\n'));
+    assert.match(
+      r.errLines.join('\n'),
+      /OAuth credentials for site "siteX" changed before its App Password fallback could be restored/
+    );
+    assert.doesNotMatch(r.lines.join('\n'), /✗ OAuth test failed — reverting\./);
+    const cfg = h.readConfig();
+    assert.equal(cfg.sites.siteX.auth.method, 'oauth');
+    assert.equal(cfg.sites.siteX.auth.client_id, 'other-client');
+  });
+
+  it('does not restore a fallback while another OAuth consent operation owns the site', async () => {
+    const coordinator = new CredentialCoordinator({
+      secretStore: h.ctx.secretStore, configPath: h.configPath, siteId: 'siteX',
+      deps: { stateRoot: h.ctx.deps.oauthCoordinationStateRoot },
+    });
+    const entered = deferred();
+    const release = deferred();
+    let held;
+    const fakeRequest = async () => {
+      held = coordinator.withAuthorizationLock('reauth', async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      return { statusCode: 401, headers: {}, body: '', json: null };
+    };
+
+    try {
+      const r = await h.runCli('upgrade-auth', ['siteX'], { request: fakeRequest });
+      assert.equal(r.exitCode, 4, r.errLines.join('\n'));
+      assert.match(r.errLines.join('\n'), /reauth|authorization/i);
+      const cfg = h.readConfig();
+      assert.equal(cfg.sites.siteX.auth.method, 'oauth');
+      assert.ok(cfg.sites.siteX.auth.apppassword_fallback, 'consent owner keeps its fallback intact');
+    } finally {
+      release.resolve();
+      if (held) await held;
+    }
+  });
+
+  it('--confirm does not delete a fallback while another OAuth consent operation owns the site', async () => {
+    const fakeRequest = async () => ({ statusCode: 200, headers: {}, body: '{}', json: {} });
+    const upgraded = await h.runCli('upgrade-auth', ['siteX'], { request: fakeRequest });
+    assert.equal(upgraded.exitCode, 0, upgraded.errLines.join('\n'));
+    const coordinator = new CredentialCoordinator({
+      secretStore: h.ctx.secretStore, configPath: h.configPath, siteId: 'siteX',
+      deps: { stateRoot: h.ctx.deps.oauthCoordinationStateRoot },
+    });
+    const entered = deferred();
+    const release = deferred();
+    const held = coordinator.withAuthorizationLock('reauth', async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    try {
+      const r = await h.runCli('upgrade-auth', ['siteX', '--confirm']);
+      assert.equal(r.exitCode, 4, r.errLines.join('\n'));
+      const cfg = h.readConfig();
+      assert.ok(cfg.sites.siteX.auth.apppassword_fallback, 'confirm leaves consent-owned fallback untouched');
+      assert.equal(await h.ctx.secretStore.get('abilities-mcp', 'siteX/apppassword-legacy'), 'OLD-APP-PASSWORD');
+    } finally {
+      release.resolve();
+      await held;
+    }
   });
 
   it('Step 1 pre-flight fails with binding wording when adapter has no OAuth', async () => {

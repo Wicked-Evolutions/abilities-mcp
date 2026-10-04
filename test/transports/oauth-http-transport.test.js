@@ -66,6 +66,12 @@ function send(transport, line) {
   });
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
 describe('OAuthHttpTransport — bearer header construction', () => {
   it('attaches Authorization: Bearer <token> built from TokenManager', async () => {
     const { server, resource, tm, siteAuth } = await buildStack({ accessToken: 'AT-CACHED' });
@@ -134,11 +140,12 @@ describe('OAuthHttpTransport — pre-expiry refresh (H.2.1, 300s window)', () =>
   });
 });
 
-describe('OAuthHttpTransport — #90 opt-in sliding renewal (guardrail 1: no new write path for flag-off)', () => {
+describe('OAuthHttpTransport — accepted refresh persistence', () => {
   async function refreshOnce(siteOverrides) {
     const server = await new MockAuthServer().start();
     server.config.tokenJson = {
-      access_token: 'AT-NEW', refresh_token: 'RT-NEW', token_type: 'Bearer', expires_in: 3600,
+      access_token: 'AT-NEW', refresh_token: 'RT-NEW', token_type: 'Bearer',
+      expires_in: 3600, refresh_token_timeout: 7200,
     };
     const resource = await new MockMcpResource({ acceptedTokens: ['AT-NEW'] }).start();
     const store = new MemorySecretStore();
@@ -166,19 +173,19 @@ describe('OAuthHttpTransport — #90 opt-in sliding renewal (guardrail 1: no new
     } finally { await server.stop(); await resource.stop(); }
   }
 
-  it('flag OFF (absent / false / non-true) — successful refresh does NOT invoke onTokensRenewed (no new write path)', async () => {
-    assert.deepEqual(await refreshOnce({}), [], 'flag absent → callback never fires');
-    assert.deepEqual(await refreshOnce({ slidingRenewal: false }), [], 'flag false → callback never fires');
-    assert.deepEqual(await refreshOnce({ slidingRenewal: 1 }), [], 'truthy-but-not-true → still default, callback never fires');
+  it('persists every accepted refresh regardless of the historical sliding flag', async () => {
+    assert.equal((await refreshOnce({})).length, 1, 'flag absent persists');
+    assert.equal((await refreshOnce({ slidingRenewal: false })).length, 1, 'flag false persists');
+    assert.equal((await refreshOnce({ slidingRenewal: 1 })).length, 1, 'non-true value persists');
   });
 
-  it('flag ON — successful refresh invokes onTokensRenewed once with the slid expiry + rotated refs', async () => {
+  it('carries authoritative expiry metadata and rotated refs', async () => {
     const renewed = await refreshOnce({ slidingRenewal: true });
     assert.equal(renewed.length, 1, 'callback fired exactly once on the successful refresh');
     const ua = renewed[0];
     assert.equal(ua.authStatus, 'active');
-    assert.ok(Date.parse(ua.refreshTokenExpiresAt) > Date.now() + 80 * 24 * 3600 * 1000,
-      'slid forward ~90d (adapter REFRESH_TTL mirror)');
+    assert.ok(Date.parse(ua.refreshTokenExpiresAt) > Date.now() + 7000 * 1000,
+      'uses the server-provided refresh timeout');
     assert.ok(ua.accessTokenRef && ua.refreshTokenRef, 'rotated refs carried for persistence');
   });
 });
@@ -226,6 +233,184 @@ describe('OAuthHttpTransport — 401 → forceRefresh → retry-once', () => {
     } finally {
       await server.stop(); await resource.stop();
     }
+  });
+
+  it('retries an in-flight stale 401 with an externally reauthorized generation before forcing refresh', async () => {
+    const calls = [];
+    const oldAuth = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-old',
+      credentialIdentity: 'identity-old',
+      mcpResource: 'http://127.0.0.1:1/old-resource',
+    });
+    const newAuth = {
+      ...oldAuth,
+      credentialGeneration: 'generation-new',
+      credentialIdentity: 'identity-new',
+      clientId: 'client-after-reauth',
+      mcpResource: 'http://127.0.0.1:1/new-resource',
+      accessTokenRef: makeRef(SECRET_SERVICE, 'siteA/access-new'),
+      refreshTokenRef: makeRef(SECRET_SERVICE, 'siteA/refresh-new'),
+    };
+    const tokenManager = {
+      async getAccessToken(_auth, opts) {
+        calls.push(opts);
+        if (calls.length === 1) return { accessToken: 'AT-OLD', refreshed: false };
+        if (calls.length === 2) {
+          return { accessToken: 'AT-NEW', refreshed: false, updatedAuth: newAuth };
+        }
+        return { accessToken: 'AT-NEW', refreshed: false };
+      },
+    };
+    const t = new OAuthHttpTransport({
+      endpoint: oldAuth.mcpResource, tokenManager, siteAuth: oldAuth, logger: () => {},
+    });
+    const requests = [];
+    t._post = async (_body, bearer) => {
+      requests.push({ bearer, endpoint: t.endpoint, generation: t._siteAuth.credentialGeneration });
+      return requests.length === 1
+        ? { statusCode: 401, body: '' }
+        : { statusCode: 200, body: '' };
+    };
+
+    const result = await t._postWithRetry('{}');
+
+    assert.equal(result.statusCode, 200);
+    assert.deepEqual(calls, [
+      { forceRefresh: false },
+      { forceRefresh: false },
+      { forceRefresh: false },
+    ], 'an old 401 reloads the new generation instead of rotating it');
+    assert.deepEqual(requests, [
+      { bearer: 'AT-OLD', endpoint: oldAuth.mcpResource, generation: 'generation-old' },
+      { bearer: 'AT-NEW', endpoint: newAuth.mcpResource, generation: 'generation-new' },
+    ]);
+    assert.equal(t._siteAuth.clientId, 'client-after-reauth');
+  });
+
+  it('uses the generation captured with each overlapping request when a late old 401 arrives', async () => {
+    const oldAuth = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-old', credentialIdentity: 'identity-old',
+      mcpResource: 'http://127.0.0.1:1/old-resource',
+    });
+    const newAuth = {
+      ...oldAuth,
+      credentialGeneration: 'generation-new', credentialIdentity: 'identity-new',
+      clientId: 'client-after-reauth', mcpResource: 'http://127.0.0.1:1/new-resource',
+    };
+    let tokenReads = 0;
+    const tokenManager = {
+      async getAccessToken(_auth, opts) {
+        tokenReads += 1;
+        assert.equal(opts.forceRefresh, false, 'the late old 401 never rotates the newer generation');
+        if (tokenReads === 1) return { accessToken: 'AT-OLD', refreshed: false };
+        if (tokenReads === 2) return { accessToken: 'AT-NEW', refreshed: false, updatedAuth: newAuth };
+        return { accessToken: 'AT-NEW', refreshed: false };
+      },
+    };
+    const t = new OAuthHttpTransport({ endpoint: oldAuth.mcpResource, tokenManager, siteAuth: oldAuth, logger: () => {} });
+    const oldSent = deferred();
+    const releaseOld401 = deferred();
+    const requests = [];
+    t._post = async (_body, bearer) => {
+      requests.push({ bearer, endpoint: t.endpoint, generation: t._siteAuth.credentialGeneration });
+      if (bearer === 'AT-OLD') {
+        oldSent.resolve();
+        await releaseOld401.promise;
+        return { statusCode: 401, body: '' };
+      }
+      return { statusCode: 200, body: '' };
+    };
+
+    const oldRequest = t._postWithRetry('{"request":"old"}');
+    await oldSent.promise;
+    const newRequest = await t._postWithRetry('{"request":"new"}');
+    assert.equal(newRequest.statusCode, 200);
+    releaseOld401.resolve();
+    const retriedOldRequest = await oldRequest;
+
+    assert.equal(retriedOldRequest.statusCode, 200);
+    assert.deepEqual(requests, [
+      { bearer: 'AT-OLD', endpoint: oldAuth.mcpResource, generation: 'generation-old' },
+      { bearer: 'AT-NEW', endpoint: newAuth.mcpResource, generation: 'generation-new' },
+      { bearer: 'AT-NEW', endpoint: newAuth.mcpResource, generation: 'generation-new' },
+    ]);
+    assert.equal(tokenReads, 3, 'the stale request retried the adopted snapshot without a reload or rotation');
+  });
+
+  it('binds a refreshed bearer to its resource snapshot across an async renewal observer', async () => {
+    const base = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-old', mcpResource: 'http://127.0.0.1:1/old-resource',
+    });
+    const authA = { ...base, credentialGeneration: 'generation-a', mcpResource: 'http://127.0.0.1:1/resource-a' };
+    const authB = { ...base, credentialGeneration: 'generation-b', mcpResource: 'http://127.0.0.1:1/resource-b' };
+    let reads = 0;
+    const tokenManager = {
+      async getAccessToken() {
+        reads += 1;
+        if (reads === 1) return { accessToken: 'AT-A', refreshed: true, updatedAuth: authA };
+        return { accessToken: 'AT-B', refreshed: false, updatedAuth: authB };
+      },
+    };
+    const observerEntered = deferred();
+    const releaseObserver = deferred();
+    const t = new OAuthHttpTransport({
+      endpoint: base.mcpResource, tokenManager, siteAuth: base, logger: () => {},
+      onTokensRenewed: async () => { observerEntered.resolve(); await releaseObserver.promise; },
+    });
+    t.sessionId = 'old-resource-session';
+    const sent = [];
+    t._post = async (_body, bearer, snapshot) => {
+      sent.push({ bearer, endpoint: snapshot.endpoint, generation: snapshot.generation, sessionId: snapshot.sessionId });
+      return { statusCode: 200, body: '' };
+    };
+
+    const a = t._postWithRetry('{"request":"a"}');
+    await observerEntered.promise;
+    await t._postWithRetry('{"request":"b"}');
+    releaseObserver.resolve();
+    await a;
+
+    assert.deepEqual(sent, [
+      { bearer: 'AT-B', endpoint: authB.mcpResource, generation: 'generation-b', sessionId: null },
+      { bearer: 'AT-A', endpoint: authA.mcpResource, generation: 'generation-a', sessionId: null },
+    ]);
+  });
+
+  it('uses the new resource session established by its bounded re-handshake', async () => {
+    const base = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-old', mcpResource: 'http://127.0.0.1:1/old-resource',
+    });
+    const updated = { ...base, credentialGeneration: 'generation-new', mcpResource: 'http://127.0.0.1:1/new-resource' };
+    let reads = 0;
+    const t = new OAuthHttpTransport({
+      endpoint: base.mcpResource,
+      siteAuth: base,
+      logger: () => {},
+      tokenManager: {
+        async getAccessToken() {
+          reads += 1;
+          return reads === 1
+            ? { accessToken: 'AT-new', refreshed: false, updatedAuth: updated }
+            : { accessToken: 'AT-new', refreshed: false };
+        },
+      },
+    });
+    t.cachedInitRequest = { jsonrpc: '2.0', id: 'init', method: 'initialize', params: {} };
+    const sent = [];
+    t._post = async (body, _bearer, snapshot) => {
+      sent.push({ body, endpoint: snapshot.endpoint, sessionId: snapshot.sessionId });
+      return body.includes('"initialize"')
+        ? { statusCode: 200, body: '', sessionId: 'new-resource-session' }
+        : { statusCode: 200, body: '' };
+    };
+
+    await t._postWithRetry('{"request":"ordinary"}');
+
+    assert.equal(sent[0].endpoint, updated.mcpResource);
+    assert.equal(sent[0].sessionId, null, 'the re-handshake never sends the old resource session');
+    assert.deepEqual(sent[1], {
+      body: '{"request":"ordinary"}', endpoint: updated.mcpResource, sessionId: 'new-resource-session',
+    });
   });
 });
 
@@ -317,6 +502,44 @@ describe('OAuthHttpTransport — terminal 401 after refresh', () => {
     } finally {
       await t.shutdown(); await server.stop(); await resource.stop();
     }
+  });
+
+  it('reports the failed generation when an external adoption races a refresh failure', async () => {
+    const originalAuth = buildSiteAuth({ origin: 'http://127.0.0.1:1' }, {
+      credentialGeneration: 'generation-failed',
+    });
+    let transport;
+    const failed = new Error('the old refresh was rejected');
+    failed.code = 'revoked';
+    failed.updatedAuth = {
+      ...originalAuth,
+      authStatus: 'revoked',
+      credentialGeneration: 'generation-failed',
+    };
+    const tokenManager = {
+      async getAccessToken() {
+        // Another request has already adopted a distinct pair before this
+        // failed refresh reports its terminal status.
+        transport._siteAuth = {
+          ...transport._siteAuth,
+          credentialGeneration: 'generation-current',
+        };
+        throw failed;
+      },
+    };
+    let observed = null;
+    transport = new OAuthHttpTransport({
+      endpoint: 'http://127.0.0.1:1/mcp', tokenManager, siteAuth: originalAuth,
+      onAuthStatusChange: (status, info) => { observed = { status, info }; },
+      logger: () => {},
+    });
+
+    await assert.rejects(
+      () => transport._postWithRetry('{"jsonrpc":"2.0"}', 0, false),
+      (err) => err.code === 'revoked'
+    );
+    assert.equal(observed.status, 'revoked');
+    assert.equal(observed.info.credentialGeneration, 'generation-failed');
   });
 });
 

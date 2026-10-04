@@ -77,8 +77,7 @@ describe('schema-v2.validate', () => {
     assert.equal(result.ok, false);
     const all = result.errors.join('\n');
     assert.match(all, /client_id is required/);
-    assert.match(all, /access_token_ref is required/);
-    assert.match(all, /refresh_token_ref is required/);
+    assert.match(all, /requires legacy token refs or a complete credential pair reference/);
   });
 
   it('validates oauth_capability_pinned shape', () => {

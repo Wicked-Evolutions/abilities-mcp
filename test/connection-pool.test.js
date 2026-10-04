@@ -33,6 +33,57 @@ function fakeDiscover() {
 }
 
 describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
+  it('uses a persisted local OAuth marker only for that site', async () => {
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'studio/access', 'AT');
+    await store.set(SECRET_SERVICE, 'studio/refresh', 'RT');
+    await store.set(SECRET_SERVICE, 'secure/access', 'AT');
+    await store.set(SECRET_SERVICE, 'secure/refresh', 'RT');
+    const observed = [];
+    const config = {
+      defaultSite: 'studio',
+      sites: {
+        studio: {
+          url: 'http://localhost:8882',
+          mcp_resource: 'http://localhost:8882/wp-json/mcp/abilities-mcp-adapter-default-server',
+          allowInsecure: true,
+          auth: {
+            method: 'oauth', client_id: 'studio-client',
+            access_token_ref: makeRef(SECRET_SERVICE, 'studio/access'),
+            refresh_token_ref: makeRef(SECRET_SERVICE, 'studio/refresh'),
+          },
+        },
+        secure: {
+          url: 'https://example.com',
+          mcp_resource: 'https://example.com/wp-json/mcp/abilities-mcp-adapter-default-server',
+          auth: {
+            method: 'oauth', client_id: 'secure-client',
+            access_token_ref: makeRef(SECRET_SERVICE, 'secure/access'),
+            refresh_token_ref: makeRef(SECRET_SERVICE, 'secure/refresh'),
+          },
+        },
+      },
+    };
+    const discover = async (siteUrl, opts) => {
+      observed.push({ siteUrl, allowInsecure: opts.allowInsecure });
+      return fakeDiscover()(siteUrl);
+    };
+    const pool = new ConnectionPool(config, () => {}, { secretStore: store, discover });
+
+    await pool._createTransport('studio', null);
+    await pool._createTransport('secure', null);
+
+    assert.deepEqual(observed, [
+      { siteUrl: 'http://localhost:8882', allowInsecure: true },
+      { siteUrl: 'https://example.com', allowInsecure: false },
+    ]);
+    assert.equal(pool._tokenManagers.get('studio')._allowInsecure, true,
+      'the local site token manager must receive its explicit development opt-in');
+    assert.equal(pool._tokenManagers.get('secure')._allowInsecure, false,
+      'the local site marker must not enable insecure HTTP for another OAuth site');
+    assert.equal(pool._allowInsecure, false, 'site opt-in must not mutate the pool-wide flag');
+  });
+
   it('builds an OAuthHttpTransport for OAuth sites', async () => {
     const store = new MemorySecretStore();
     await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
@@ -223,6 +274,36 @@ describe('ConnectionPool dispatch — auth.method === "oauth"', () => {
       pool._createTransport('siteA', null),
       (err) => err instanceof CapabilityPinningError,
     );
+  });
+});
+
+describe('ConnectionPool — OAuth status generation fence', () => {
+  it('does not let a delayed old-generation failure overwrite a newer authorization status', async () => {
+    const config = {
+      _configPath: '/test/wp-sites.json',
+      sites: {
+        network: {
+          auth: { credential_generation: 'generation-new' },
+          auth_status: 'active',
+        },
+      },
+    };
+    const coordinator = {
+      forSite(siteId) {
+        assert.equal(siteId, 'network', 'alias callbacks persist through the owning site key');
+        return {
+          async withConfigCommitLock(_operation, fn) {
+            return fn({ config });
+          },
+        };
+      },
+    };
+    const pool = new ConnectionPool(config, () => {}, { credentialCoordinator: coordinator });
+    await pool._defaultPersistAuthStatus('network', 'expired', 'generation-old');
+    assert.equal(config.sites.network.auth_status, 'active');
+
+    await pool._defaultPersistAuthStatus('network', 'expired', 'generation-new');
+    assert.equal(config.sites.network.auth_status, 'expired');
   });
 });
 

@@ -61,7 +61,7 @@ function makeHarness(opts = {}) {
     identityProvider,
     configPath,
     allowInsecure: true,
-    deps: opts.deps || {},
+    deps: Object.assign({ oauthCoordinationStateRoot: path.join(dir, 'state') }, opts.deps || {}),
   });
 
   function runCli(subcommand, argv, extraDeps) {

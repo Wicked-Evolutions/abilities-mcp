@@ -154,7 +154,9 @@ if (!isSubcommandInvocation) {
     log(`Config loaded: ${siteKeys.length} site(s): ${siteKeys.join(', ')} (default: ${config.defaultSite})`);
     log(`Multi-site mode: ${isMultiSite}`);
 
-    const pool = new ConnectionPool(config, log);
+    const pool = new ConnectionPool(config, log, {
+      allowInsecure: args['allow-insecure'] === true,
+    });
     const catalog = new ToolCatalog(config, log);
 
     if (catalog.isEnabled()) {

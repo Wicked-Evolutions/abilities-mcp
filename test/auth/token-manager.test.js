@@ -58,9 +58,74 @@ describe('TokenManager.getAccessToken — refresh window (H.2.1 + Token-refresh)
   });
 });
 
+describe('TokenManager authoritative expiry metadata', () => {
+  it('freezes next_refresh_at from the shorter authoritative lifetime', () => {
+    const start = Date.parse('2026-06-01T00:00:00Z');
+    const tm = new TokenManager({ secretStore: new MemorySecretStore() });
+    const metadata = tm._parseExpiryMetadata({
+      expires_in: 3600,
+      refresh_token_timeout: 10,
+    }, start);
+    assert.equal(metadata.nextRefreshAt, new Date(start + 9000).toISOString(),
+      'L=10 and lead=1 schedules renewal at 9 seconds');
+  });
+
+  it('rejects malformed finite expiry values rather than choosing a local default', () => {
+    const tm = new TokenManager({ secretStore: new MemorySecretStore() });
+    assert.throws(
+      () => tm._parseExpiryMetadata({ expires_in: 3600, refresh_token_timeout: '90' }, Date.now()),
+      (err) => err.code === 'malformed_expiry_metadata'
+    );
+  });
+
+  it('skips a near-deadline refresh only when the current access token already reaches that deadline', () => {
+    const now = Date.parse('2026-10-03T00:00:00.000Z');
+    const tm = new TokenManager({ secretStore: new MemorySecretStore(), deps: { now: () => now } });
+    const deadline = new Date(now + 60_000).toISOString();
+    assert.equal(tm._isWithinRefreshWindow({
+      nextRefreshAt: new Date(now - 1).toISOString(),
+      accessTokenExpiresAt: deadline,
+      authorizationExpiresAt: deadline,
+    }), false, 'a capped, still-usable access token is not pointlessly rotated');
+    assert.equal(tm._isWithinRefreshWindow({
+      nextRefreshAt: new Date(now - 1).toISOString(),
+      accessTokenExpiresAt: new Date(now + 20_000).toISOString(),
+      authorizationExpiresAt: deadline,
+    }), true, 'shorter usable access is refreshed because it can still reach the deadline');
+  });
+});
+
 describe('TokenManager.refresh — retry semantics', () => {
-  it('retries up to 2 times on 5xx with the same refresh token', async () => {
-    const server = await new MockAuthServer({ refreshFailures: 2 }).start();
+  it('preserves a durable marker budget error instead of relabelling it as network_error', async () => {
+    let sends = 0;
+    const marker = { recovery_deadline_at: new Date(Date.now() + 10_000).toISOString() };
+    const coordinator = {
+      hasConfig: true,
+      async withAuthorizationLock(_operation, fn) { return fn(); },
+      async readValidatedSnapshot(auth) { return auth; },
+      async withCredentialLock(_identity, _operation, fn) { return fn(); },
+      async recoverPrepared() { return { retry: true, marker }; },
+      async recordRefreshAttempt() {
+        throw new RefreshError('OAuth refresh outcome is unknown; run reauth', {
+          code: 'unknown_refresh_outcome', state: 'refreshing',
+        });
+      },
+    };
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+    const tm = new TokenManager({
+      secretStore: store, credentialCoordinator: coordinator,
+      deps: { postForm: async () => { sends += 1; return { statusCode: 200, json: {} }; } },
+    });
+    await assert.rejects(
+      tm.refresh(buildSiteAuth()),
+      (err) => err.code === 'unknown_refresh_outcome'
+    );
+    assert.equal(sends, 0, 'no HTTP send occurs after the durable budget closes');
+  });
+
+  it('makes at most two replay-safe sends on 5xx with the same refresh token', async () => {
+    const server = await new MockAuthServer({ refreshFailures: 1 }).start();
     try {
       const store = new MemorySecretStore();
       await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
@@ -72,8 +137,8 @@ describe('TokenManager.refresh — retry semantics', () => {
       }));
       assert.match(tokens.access_token, /^at-/);
       assert.equal(updatedAuth.authStatus, 'active');
-      // Server saw 3 attempts (2 failures + 1 success).
-      assert.equal(server._refreshAttempts, 3);
+      // Server saw two attempts (one failure + one success).
+      assert.equal(server._refreshAttempts, 2);
     } finally { await server.stop(); }
   });
 
@@ -250,8 +315,7 @@ describe('TokenManager.refresh — retry semantics', () => {
   });
 });
 
-describe('TokenManager.refresh — #90 opt-in sliding renewal', () => {
-  const NINETY_D = 90 * 24 * 3600 * 1000;
+describe('TokenManager.refresh — authoritative expiry metadata', () => {
 
   async function freshRefresh(server, clockMs, siteOverrides) {
     const store = new MemorySecretStore();
@@ -267,59 +331,37 @@ describe('TokenManager.refresh — #90 opt-in sliding renewal', () => {
     }));
   }
 
-  it('flag ON — a successful refresh slides refresh_token_expires_at to now+90d; stays alive indefinitely while used', async () => {
-    const server = await new MockAuthServer().start();
+  it('persists the server-provided refresh timeout regardless of sliding_renewal', async () => {
+    const server = await new MockAuthServer({ tokenJson: {
+      access_token: 'AT-1', refresh_token: 'RT-1', token_type: 'Bearer',
+      expires_in: 3600, refresh_token_timeout: 7200,
+    } }).start();
     try {
       const clock = { t: Date.parse('2026-06-01T00:00:00Z') };
-      const frozenIssued = '2026-08-01T00:00:00Z'; // original bounded expiry
+      const frozenIssued = '2026-08-01T00:00:00Z';
 
       const r1 = await freshRefresh(server, clock, {
         authStatus: 'active', slidingRenewal: true, refreshTokenExpiresAt: frozenIssued,
       });
       assert.equal(r1.updatedAuth.refreshTokenExpiresAt,
-        new Date(clock.t + NINETY_D).toISOString(),
-        'slid to now+90d (adapter REFRESH_TTL mirror), not the frozen issuance value');
+        new Date(clock.t + 7200 * 1000).toISOString(),
+        'uses the authoritative timeout, not the old 90-day approximation');
       assert.notEqual(r1.updatedAuth.refreshTokenExpiresAt, frozenIssued);
-
-      // Use it again 60 days later — still within the slid window → slides again.
-      clock.t += 60 * 24 * 3600 * 1000;
-      const r2 = await freshRefresh(server, clock, {
-        authStatus: 'active', slidingRenewal: true,
-        refreshTokenExpiresAt: r1.updatedAuth.refreshTokenExpiresAt,
-      });
-      assert.equal(r2.updatedAuth.refreshTokenExpiresAt,
-        new Date(clock.t + NINETY_D).toISOString());
-      assert.ok(
-        Date.parse(r2.updatedAuth.refreshTokenExpiresAt) > Date.parse(r1.updatedAuth.refreshTokenExpiresAt),
-        'window strictly advances on each use → effectively non-expiring while in use'
-      );
     } finally { await server.stop(); }
   });
 
-  it('flag OFF (default-preserved guard) — refresh_token_expires_at is BYTE-IDENTICAL across refreshes; no slide, no new write', async () => {
+  it('records missing new metadata as not-provided without inventing a new duration', async () => {
     const server = await new MockAuthServer().start();
     try {
       const clock = { t: Date.parse('2026-06-01T00:00:00Z') };
       const frozenIssued = '2026-08-01T00:00:00Z';
 
-      // Default: flag absent entirely.
       const rAbsent = await freshRefresh(server, clock, {
         authStatus: 'active', refreshTokenExpiresAt: frozenIssued,
       });
       assert.equal(rAbsent.updatedAuth.refreshTokenExpiresAt, frozenIssued,
-        'flag absent → unchanged (bounded ~90-days-from-initial-auth preserved)');
-
-      // Explicit false, and a non-true truthy value — both default path.
-      clock.t += 10 * 24 * 3600 * 1000;
-      const rFalse = await freshRefresh(server, clock, {
-        authStatus: 'active', slidingRenewal: false, refreshTokenExpiresAt: frozenIssued,
-      });
-      assert.equal(rFalse.updatedAuth.refreshTokenExpiresAt, frozenIssued);
-      const rTruthy = await freshRefresh(server, clock, {
-        authStatus: 'active', slidingRenewal: 1, refreshTokenExpiresAt: frozenIssued,
-      });
-      assert.equal(rTruthy.updatedAuth.refreshTokenExpiresAt, frozenIssued,
-        'strictly === true required — truthy-but-not-true is still default');
+        'retains only existing compatibility metadata');
+      assert.equal(rAbsent.updatedAuth.refreshExpirySource, 'not-provided');
     } finally { await server.stop(); }
   });
 
@@ -375,7 +417,7 @@ describe('TokenManager.persistTokens', () => {
     const tm = new TokenManager({ secretStore: store, deps: { now: () => 1_700_000_000_000 } });
     const result = await tm.persistTokens({
       siteId: 'siteA',
-      tokens: { access_token: 'AT', refresh_token: 'RT', expires_in: 3600 },
+      tokens: { access_token: 'AT', refresh_token: 'RT', expires_in: 3600, refresh_token_timeout: 90 * 24 * 3600 },
     });
     assert.equal(await store.get(SECRET_SERVICE, 'siteA/access'), 'AT');
     assert.equal(await store.get(SECRET_SERVICE, 'siteA/refresh'), 'RT');

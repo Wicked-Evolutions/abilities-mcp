@@ -4,8 +4,10 @@ const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { OAuthClient, DEFAULT_SCOPE } = require('../../lib/auth/oauth-client');
+const { TokenManager } = require('../../lib/auth/token-manager');
 const { FreshEachTimeIdentityProvider } = require('../../lib/auth/fresh-each-time-identity');
 const { MemorySecretStore } = require('../../lib/auth/memory-secret-store');
+const { postForm } = require('../../lib/auth/http-json');
 const { STATES } = require('../../lib/auth/events');
 const { CapabilityPinningError } = require('../../lib/auth/errors');
 const { MockAuthServer } = require('./helpers/mock-auth-server');
@@ -80,6 +82,46 @@ describe('OAuthClient — full flow against MockAuthServer', () => {
     const r = await client.run();
     assert.equal(typeof DEFAULT_SCOPE, 'string');
     assert.deepEqual(r.scopes.sort(), ['abilities:read', 'abilities:write'].sort());
+  });
+
+  it('anchors initial token expiry to the authorization-code request start', async () => {
+    const requestStart = Date.parse('2026-10-03T10:00:00.000Z');
+    const client = new OAuthClient({
+      siteUrl: server.siteUrl,
+      clientName: 'Test',
+      softwareVersion: '1.4.0',
+      identityProvider: newIdp(),
+      allowInsecure: true,
+      deps: {
+        now: () => requestStart,
+        openBrowser: async () => ({}),
+        // Keep the real HTTP exchange path, but delay its response to model a
+        // slow token endpoint. Persistence below has a later local clock.
+        postForm: async (...args) => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return postForm(...args);
+        },
+      },
+    });
+    autoCompleteFlow(client);
+
+    const result = await client.run();
+    const manager = new TokenManager({
+      secretStore: new MemorySecretStore(),
+      deps: { now: () => requestStart + 60_000 },
+    });
+    const persisted = await manager.persistTokens({
+      siteId: 'delayed-exchange',
+      tokens: result.tokens,
+      tokenRequestStartedAt: result.tokenRequestStartedAt,
+    });
+
+    assert.equal(result.tokenRequestStartedAt, requestStart);
+    assert.equal(
+      persisted.accessTokenExpiresAt,
+      new Date(requestStart + result.tokens.expires_in * 1000).toISOString(),
+      'the response/persistence delay cannot extend the issued access lifetime'
+    );
   });
 
   it('preserves capabilityPin.firstSeenAt across reauths', async () => {

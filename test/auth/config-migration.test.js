@@ -196,4 +196,29 @@ describe('config-migration.migrateFile', () => {
 
     fs.unlinkSync(file);
   });
+
+  it('serializes concurrent migration attempts without dropping legacy sites', async () => {
+    const file = tmpFile();
+    const legacy = {
+      defaultSite: 'one',
+      sites: {
+        one: { url: 'https://one.example', transport: 'http', http: { endpoint: 'https://one.example/x', username: 'u1', password: 'P1' } },
+        two: { url: 'https://two.example', transport: 'http', http: { endpoint: 'https://two.example/x', username: 'u2', password: 'P2' } },
+      },
+    };
+    fs.writeFileSync(file, JSON.stringify(legacy, null, 2));
+    const store = new MemorySecretStore();
+
+    const results = await Promise.all([
+      migrateFile({ filePath: file, secretStore: store }),
+      migrateFile({ filePath: file, secretStore: store }),
+    ]);
+
+    assert.equal(results.filter((result) => result.migrated).length, 1);
+    assert.equal(results.filter((result) => result.alreadyV2).length, 1);
+    const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(Object.keys(written.sites).sort(), ['one', 'two']);
+    fs.unlinkSync(file);
+    fs.unlinkSync(`${file}.v1.bak`);
+  });
 });

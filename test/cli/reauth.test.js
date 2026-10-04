@@ -2,10 +2,35 @@
 
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 
 const { MockAuthServer } = require('../auth/helpers/mock-auth-server');
 const { makeHarness, autoConsentDeps, v2SiteOAuth, v2SiteAppPassword } = require('./helpers/cli-harness');
 const { SCHEMA_VERSION } = require('../../lib/auth/schema-v2');
+const { CredentialCoordinator, TokenManager } = require('../../lib/auth');
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
+function siteAuthState(site, tokenEndpoint) {
+  const auth = site.auth;
+  return {
+    siteId: 'mock', tokenEndpoint, clientId: auth.client_id,
+    accessTokenRef: auth.access_token_ref, refreshTokenRef: auth.refresh_token_ref,
+    accessTokenExpiresAt: auth.access_token_expires_at,
+    refreshTokenExpiresAt: auth.refresh_token_expires_at,
+    authorizationExpiresAt: auth.authorization_expires_at,
+    nextRefreshAt: auth.next_refresh_at,
+    credentialPairRef: auth.credential_pair_ref,
+    credentialGeneration: auth.credential_generation,
+    credentialIdentity: auth.credential_identity,
+    credentialPairSlot: auth.credential_pair_slot,
+    authStatus: site.auth_status,
+  };
+}
 
 describe('CLI reauth', () => {
   let server;
@@ -54,6 +79,49 @@ describe('CLI reauth', () => {
     const cfg = h.readConfig();
     assert.ok(cfg.sites.mock.auth.apppassword_fallback);
     assert.equal(cfg.sites.mock.auth.apppassword_fallback.username, 'wp_admin');
+  });
+
+  it('blocks runtime renewal during browser consent, then adopts the published generation', async () => {
+    h.writeConfig({
+      schema_version: SCHEMA_VERSION,
+      sites: { mock: v2SiteOAuth(server.siteUrl) },
+    });
+    // Establish a real generated pair for the runtime reader.
+    let first = await h.runCli('reauth', ['mock']);
+    assert.equal(first.exitCode, 0, first.errLines.join('\n'));
+    const before = h.readConfig().sites.mock;
+    const enteredConsent = deferred();
+    const releaseConsent = deferred();
+    const delayedConsent = {
+      openBrowser: async (url) => {
+        const authorize = new URL(url);
+        enteredConsent.resolve();
+        await releaseConsent.promise;
+        const callback = `${authorize.searchParams.get('redirect_uri')}?code=AUTOPASS&state=${encodeURIComponent(authorize.searchParams.get('state'))}`;
+        http.get(callback, (res) => res.resume()).on('error', () => {});
+        return { spawned: true, platform: 'test' };
+      },
+    };
+    const authorization = h.runCli('reauth', ['mock'], { oauthClientDeps: delayedConsent });
+    await enteredConsent.promise;
+
+    const coordinator = new CredentialCoordinator({
+      secretStore: h.ctx.secretStore, configPath: h.configPath, siteId: 'mock',
+      deps: { stateRoot: h.ctx.deps.oauthCoordinationStateRoot },
+    });
+    const runtime = new TokenManager({ secretStore: h.ctx.secretStore, credentialCoordinator: coordinator });
+    await assert.rejects(
+      runtime.getAccessToken(siteAuthState(before, `${server.siteUrl}/oauth/token`)),
+      (err) => err.code === 'reauth_in_progress'
+    );
+
+    releaseConsent.resolve();
+    const completed = await authorization;
+    assert.equal(completed.exitCode, 0, completed.errLines.join('\n'));
+    const after = h.readConfig().sites.mock;
+    assert.notEqual(after.auth.credential_generation, before.auth.credential_generation);
+    const adopted = await runtime.getAccessToken(siteAuthState(before, `${server.siteUrl}/oauth/token`));
+    assert.equal(adopted.updatedAuth.credentialGeneration, after.auth.credential_generation);
   });
 
   it('errors on unknown site_id', async () => {
@@ -250,4 +318,3 @@ describe('CLI reauth — scope mutation flags (Issue #50)', () => {
     assert.match(r.errLines.join('\n'), /--add-scope, --remove-scope are mutually exclusive/);
   });
 });
-

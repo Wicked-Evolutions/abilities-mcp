@@ -47,6 +47,68 @@ describe('CLI self-check (H.2.6)', () => {
     assert.match(r.lines.join('\n'), /Apache\/2\.4/);
   });
 
+  it('uses the committed credential pair instead of legacy token references', async () => {
+    const identity = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    const generation = '0123456789abcdef0123456789abcdef';
+    const account = `${identity}/credential-pair/a`;
+    await h.ctx.secretStore.set('abilities-mcp', account, JSON.stringify({
+      version: 1,
+      generation,
+      access_token: 'PAIR-ACCESS',
+      refresh_token: 'PAIR-REFRESH',
+      access_token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+      refresh_token_expires_at: new Date(Date.now() + 90 * 24 * 3600 * 1000).toISOString(),
+      authorization_expires_at: null,
+      next_refresh_at: null,
+    }));
+    const pairSite = v2SiteOAuth(server.siteUrl);
+    delete pairSite.auth.access_token_ref;
+    delete pairSite.auth.refresh_token_ref;
+    Object.assign(pairSite.auth, {
+      credential_pair_ref: makeRef('abilities-mcp', account),
+      credential_generation: generation,
+      credential_identity: identity,
+      credential_pair_slot: 'a',
+    });
+    h.writeConfig({ schema_version: SCHEMA_VERSION, sites: { mock: pairSite } });
+
+    const r = await h.runCli('self-check', ['mock'], {
+      request: async ({ headers }) => {
+        assert.equal(headers.Authorization, 'Bearer PAIR-ACCESS');
+        return {
+          statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{}',
+          json: { authorization_present: true },
+        };
+      },
+    });
+
+    assert.equal(r.exitCode, 0);
+  });
+
+  it('uses the externally reauthorized site URL with the adopted bearer', async () => {
+    const reauthorizedUrl = 'https://reauthorized.example.test';
+    let seenUrl = null;
+    const r = await h.runCli('self-check', ['mock'], {
+      discover: async () => {
+        const config = h.readConfig();
+        config.sites.mock.url = reauthorizedUrl;
+        h.writeConfig(config);
+        return { asMetadata: { token_endpoint: `${server.origin}/oauth/token` } };
+      },
+      request: async ({ url, headers }) => {
+        seenUrl = url;
+        assert.equal(headers.Authorization, 'Bearer AT-MOCK');
+        return {
+          statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{}',
+          json: { authorization_present: true },
+        };
+      },
+    });
+
+    assert.equal(r.exitCode, 0, r.errLines.join('\n'));
+    assert.equal(seenUrl, `${reauthorizedUrl}${'/wp-json/abilities-mcp-adapter/v1/oauth/echo-headers'}`);
+  });
+
   it('reports ⚠ + recovery hints when header is missing — exits non-zero', async () => {
     const fakeRequest = async () => ({
       statusCode: 200, headers: { 'content-type': 'application/json' }, body: '{}',
