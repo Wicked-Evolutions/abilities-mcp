@@ -3,12 +3,12 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { openBrowser, _commandFor, _needsVerbatim } = require('../../lib/auth/browser-launcher');
+const { openBrowser, _commandFor } = require('../../lib/auth/browser-launcher');
 
 describe('browser-launcher', () => {
   it('selects the right command per platform', () => {
     assert.deepEqual(_commandFor('darwin'), { cmd: 'open', args: [] });
-    assert.deepEqual(_commandFor('win32'), { cmd: 'cmd', args: ['/c', 'start', ''] });
+    assert.deepEqual(_commandFor('win32'), { cmd: 'rundll32.exe', args: ['url.dll,FileProtocolHandler'] });
     assert.deepEqual(_commandFor('linux'), { cmd: 'xdg-open', args: [] });
   });
 
@@ -31,16 +31,26 @@ describe('browser-launcher', () => {
     assert.equal(result.platform, 'override');
   });
 
-  it('passes URL with ampersands intact via launcher override', async () => {
-    const url = 'https://example.com/oauth/authorize?response_type=code&client_id=abc&redirect_uri=https%3A%2F%2Fcallback';
-    const calls = [];
-    await openBrowser(url, { launcher: async (u) => { calls.push(u); } });
-    assert.equal(calls[0], url, 'URL must not be truncated at &');
-  });
+  it('passes URL with &, ?, =, and %XX intact as a single win32 spawn argument', async () => {
+    const url = 'https://example.com/oauth/authorize?response_type=code&client_id=abc&redirect_uri=https%3A%2F%2Fcallback%3Fstate%3Dxyz%26scope%3Dread';
+    let spawnCall = null;
+    const fakeChild = {
+      on: () => {},
+      unref: () => {},
+    };
+    const result = await openBrowser(url, {
+      platform: 'win32',
+      spawner: (cmd, args, spawnOpts) => {
+        spawnCall = { cmd, args, spawnOpts };
+        return fakeChild;
+      },
+    });
 
-  it('reports verbatim-arguments need for win32 only', () => {
-    assert.equal(_needsVerbatim('win32'), true);
-    assert.equal(_needsVerbatim('darwin'), false);
-    assert.equal(_needsVerbatim('linux'), false);
+    assert.equal(result.spawned, true);
+    assert.equal(result.platform, 'win32');
+    assert.equal(spawnCall.cmd, 'rundll32.exe');
+    assert.deepEqual(spawnCall.args, ['url.dll,FileProtocolHandler', url]);
+    assert.equal(spawnCall.args[1], url, 'URL must not be mutated or truncated at & or %');
+    assert.equal(spawnCall.spawnOpts.windowsVerbatimArguments, undefined, 'no-shell launcher does not need windowsVerbatimArguments');
   });
 });
