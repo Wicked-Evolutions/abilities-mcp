@@ -117,6 +117,33 @@ describe('TokenManager.getAccessToken — refresh window (H.2.1 + Token-refresh)
     assert.equal(attempts, 2);
   });
 
+  it('does not reuse the bearer after a token-endpoint 5xx then a proven-unsent failure', async () => {
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/access', 'AT-still-valid');
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+    let attempts = 0;
+    const tm = new TokenManager({
+      secretStore: store,
+      deps: {
+        now: () => now,
+        sleep: () => Promise.resolve(),
+        postForm: async () => {
+          attempts += 1;
+          if (attempts === 1) return { statusCode: 503, body: '', json: null };
+          throw Object.assign(new Error('temporary DNS failure'), {
+            code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+          });
+        },
+      },
+    });
+    await assert.rejects(
+      tm.getAccessToken(buildSiteAuth({ accessTokenExpiresAt: new Date(now + 240_000).toISOString() })),
+      (err) => err.code === 'network_error' && err.refreshDelivery === 'unknown'
+    );
+    assert.equal(attempts, 2, 'the received 5xx invalidates the full retry chain');
+  });
+
   it('does not use the proactive fallback after forced refresh, access expiry, or a passed fixed deadline', async () => {
     const now = Date.parse('2026-10-29T00:00:00.000Z');
     const failure = () => Object.assign(new Error('temporary DNS failure'), {
