@@ -10,6 +10,7 @@ const http = require('node:http');
 
 const { CredentialCoordinator } = require('../../lib/auth/credential-coordinator');
 const { TokenManager } = require('../../lib/auth/token-manager');
+const { RefreshError } = require('../../lib/auth/errors');
 const { MemorySecretStore } = require('../../lib/auth/memory-secret-store');
 const { makeRef } = require('../../lib/auth/secret-store');
 
@@ -47,6 +48,40 @@ function deferred() {
   let resolve;
   const promise = new Promise((next) => { resolve = next; });
   return { promise, resolve };
+}
+
+async function configuredPairFixture(root, now) {
+  const store = new MemorySecretStore();
+  const seed = new CredentialCoordinator({ secretStore: store, deps: { stateRoot: root } });
+  const identity = 'e'.repeat(64);
+  const accessTokenExpiresAt = new Date(now + 240_000).toISOString();
+  const pair = await seed.preparePair({
+    credentialIdentity: identity,
+    auth: { credential_pair_slot: 'b' },
+    tokens: { access_token: 'AT-old', refresh_token: 'RT-old' },
+    accessTokenExpiresAt,
+    refreshTokenExpiresAt: new Date(now + 90 * 24 * 3600 * 1000).toISOString(),
+  });
+  const configPath = writeConfig(root, 'site', {
+    method: 'oauth', client_id: 'client-a',
+    credential_pair_ref: pair.credential_pair_ref,
+    credential_generation: pair.credential_generation,
+    credential_identity: pair.credential_identity,
+    credential_pair_slot: pair.credential_pair_slot,
+    access_token_expires_at: pair.access_token_expires_at,
+    refresh_token_expires_at: pair.refresh_token_expires_at,
+  });
+  const coordinator = new CredentialCoordinator({
+    secretStore: store, configPath, siteId: 'site', deps: { stateRoot: root, now: () => now },
+  });
+  const siteAuth = {
+    siteId: 'site', siteUrl: 'https://example.test', tokenEndpoint: 'https://issuer.test/token', clientId: 'client-a',
+    credentialPairRef: pair.credential_pair_ref, credentialGeneration: pair.credential_generation,
+    credentialIdentity: pair.credential_identity, credentialPairSlot: pair.credential_pair_slot,
+    accessTokenExpiresAt: pair.access_token_expires_at,
+    refreshTokenExpiresAt: pair.refresh_token_expires_at,
+  };
+  return { store, configPath, coordinator, siteAuth };
 }
 
 describe('CredentialCoordinator', () => {
@@ -589,5 +624,132 @@ describe('CredentialCoordinator', () => {
     const disk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.notEqual(disk.sites.site.auth.credential_generation, pair.credential_generation);
     assert.equal(disk.sites.site.auth.refresh_attempt, undefined);
+  });
+
+  it('clears a newly-created proven-unsent marker so a reconstructed manager can refresh later', async () => {
+    const root = makeRoot();
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const { store, configPath, coordinator, siteAuth } = await configuredPairFixture(root, now);
+    const dnsFailure = () => Object.assign(new Error('temporary DNS failure'), {
+      code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+    });
+    const first = new TokenManager({
+      secretStore: store, credentialCoordinator: coordinator,
+      deps: { now: () => now, sleep: async () => {}, postForm: async () => { throw dnsFailure(); } },
+    });
+    const retained = await first.getAccessToken(siteAuth);
+    assert.equal(retained.accessToken, 'AT-old');
+    assert.equal(retained.refreshDeferred, true);
+    assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).sites.site.auth.refresh_attempt, undefined);
+
+    const restartedCoordinator = new CredentialCoordinator({
+      secretStore: store, configPath, siteId: 'site', deps: { stateRoot: root, now: () => now },
+    });
+    const restarted = new TokenManager({
+      secretStore: store, credentialCoordinator: restartedCoordinator,
+      deps: {
+        now: () => now, sleep: async () => {},
+        postForm: async () => ({ statusCode: 200, json: {
+          access_token: 'AT-new', refresh_token: 'RT-new', expires_in: 3600,
+        } }),
+      },
+    });
+    const refreshed = await restarted.getAccessToken(siteAuth);
+    assert.equal(refreshed.accessToken, 'AT-new');
+  });
+
+  it('fails closed and retains the marker when proven-unsent cleanup cannot persist', async () => {
+    const root = makeRoot();
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const { store, configPath, coordinator, siteAuth } = await configuredPairFixture(root, now);
+    const originalCommit = coordinator.withConfigCommitLock.bind(coordinator);
+    coordinator.withConfigCommitLock = (operation, fn, opts) => {
+      if (operation === 'clear-proven-unsent-refresh') {
+        throw new RefreshError('simulated config persistence failure', {
+          code: 'credential_config_unavailable', state: 'refreshing',
+        });
+      }
+      return originalCommit(operation, fn, opts);
+    };
+    const tm = new TokenManager({
+      secretStore: store, credentialCoordinator: coordinator,
+      deps: {
+        now: () => now, sleep: async () => {},
+        postForm: async () => { throw Object.assign(new Error('temporary DNS failure'), {
+          code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+        }); },
+      },
+    });
+    await assert.rejects(tm.getAccessToken(siteAuth), (err) => err.code === 'credential_config_unavailable');
+    assert.ok(JSON.parse(fs.readFileSync(configPath, 'utf8')).sites.site.auth.refresh_attempt,
+      'a cleanup failure leaves the marker for fail-closed recovery');
+  });
+
+  it('never clears an abandoned marker from an earlier invocation', async () => {
+    const root = makeRoot();
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const { store, configPath, coordinator, siteAuth } = await configuredPairFixture(root, now);
+    const abandoned = await coordinator.beginRefresh(siteAuth);
+    const tm = new TokenManager({
+      secretStore: store, credentialCoordinator: coordinator,
+      deps: {
+        now: () => now, sleep: async () => {},
+        postForm: async () => { throw Object.assign(new Error('temporary DNS failure'), {
+          code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+        }); },
+      },
+    });
+    await assert.rejects(
+      tm.getAccessToken(siteAuth),
+      (err) => err.code === 'network_error' && err.refreshDelivery === 'unknown'
+    );
+    const marker = JSON.parse(fs.readFileSync(configPath, 'utf8')).sites.site.auth.refresh_attempt;
+    assert.equal(marker.nonce, abandoned.nonce);
+    assert.equal(marker.attempt_count, 2);
+  });
+
+  it('does not clear a marker after concurrent reauthorization changes its identity and generation', async () => {
+    const root = makeRoot();
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const { configPath, coordinator, siteAuth } = await configuredPairFixture(root, now);
+    const marker = await coordinator.beginRefresh(siteAuth);
+    await coordinator.recordRefreshAttempt(marker);
+    await coordinator.recordRefreshAttempt(marker);
+    const disk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    disk.sites.site.auth.client_id = 'client-after-reauth';
+    disk.sites.site.auth.credential_identity = 'f'.repeat(64);
+    disk.sites.site.auth.credential_generation = 'replacement-generation';
+    fs.writeFileSync(configPath, JSON.stringify(disk));
+    await assert.rejects(
+      coordinator.clearProvenUnsentRefresh(marker, siteAuth, 2),
+      (err) => err.code === 'unknown_refresh_outcome'
+    );
+    assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).sites.site.auth.refresh_attempt.nonce, marker.nonce);
+  });
+
+  it('retains the marker after a received 5xx then a proven-unsent DNS failure', async () => {
+    const root = makeRoot();
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const { store, configPath, coordinator, siteAuth } = await configuredPairFixture(root, now);
+    let attempts = 0;
+    const tm = new TokenManager({
+      secretStore: store, credentialCoordinator: coordinator,
+      deps: {
+        now: () => now, sleep: async () => {},
+        postForm: async () => {
+          attempts += 1;
+          if (attempts === 1) return { statusCode: 503, body: '', json: null };
+          throw Object.assign(new Error('temporary DNS failure'), {
+            code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+          });
+        },
+      },
+    });
+    await assert.rejects(
+      tm.getAccessToken(siteAuth),
+      (err) => err.code === 'network_error' && err.refreshDelivery === 'unknown'
+    );
+    assert.equal(attempts, 2);
+    assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).sites.site.auth.refresh_attempt.attempt_count, 2);
   });
 });
