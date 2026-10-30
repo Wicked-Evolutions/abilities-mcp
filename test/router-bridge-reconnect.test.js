@@ -106,6 +106,34 @@ function callResponse(sent, id) {
   return sent.find((message) => message.id === id);
 }
 
+async function waitFor(predicate, label, timeoutMs = 1500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function waitForResponse(harness, id, label = `response ${id}`) {
+  await waitFor(() => callResponse(harness.sent, id) !== undefined, label);
+  const message = callResponse(harness.sent, id);
+  assert.equal(message.jsonrpc, '2.0', `${label} must be a JSON-RPC response`);
+  assert.equal(message.id, id, `${label} must retain its request id`);
+  return message;
+}
+
+async function waitForRecovered(harness, id, label = `reconnect ${id}`) {
+  const message = await waitForResponse(harness, id, label);
+  assert.ok(message.result, `${label} must return a result`);
+  assert.notEqual(message.result.isError, true, `${label} must succeed`);
+  await waitFor(
+    () => harness.promoted.length === 1 && harness.router.degraded === false && harness.router.defaultTransport === harness.transport,
+    `${label} promotion`
+  );
+  return message;
+}
+
 describe('McpRouter — explicit degraded reconnect (#125)', () => {
   it('recovers only the selected site after private initialize and a complete paginated catalog', async () => {
     const h = makeRecoveryHarness({ pages: [
@@ -114,7 +142,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     ] });
 
     reconnect(h.router, 10, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForRecovered(h, 10);
 
     assert.equal(h.created.length, 1);
     assert.deepEqual(h.created, ['siteA']);
@@ -147,7 +175,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
   it('binds private correlation to the staged transport and drops unexpected staged messages', async () => {
     const h = makeRecoveryHarness({ hang: true, recoveryTimeoutMs: 100 });
     reconnect(h.router, 111, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => h.requests.some((entry) => entry.request.method === 'initialize'), 'staged initialize request');
     const privateId = h.requests.find((entry) => entry.request.method === 'initialize').request.id;
 
     // A matching id from the normal transport is an ordinary client response,
@@ -169,7 +197,10 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     reconnect(h.router, 12, 'siteA');
     reconnect(h.router, 13, 'siteA');
     reconnect(h.router, 14, 'siteB');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitForResponse(h, 12, 'first coalesced reconnect');
+    await waitForResponse(h, 13, 'second coalesced reconnect');
+    await waitForResponse(h, 14, 'conflicting reconnect');
+    await waitFor(() => h.sent.some((message) => message.method === 'notifications/tools/list_changed'), 'reconnect catalog notification');
 
     assert.equal(h.created.length, 1);
     assert.equal(h.requests.filter((entry) => entry.request.method === 'initialize').length, 1);
@@ -197,7 +228,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
   it('keeps a timed-out attempt busy until staged cleanup and credential work actually settle', async () => {
     const h = makeRecoveryHarness({ hang: true, recoveryTimeoutMs: 15 });
     reconnect(h.router, 151, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => h.transport !== undefined, 'staged transport before cleanup override');
     let releaseCleanup;
     const cleanupGate = new Promise((resolve) => { releaseCleanup = resolve; });
     h.transport.shutdown = async () => cleanupGate;
@@ -211,7 +242,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.equal(callResponse(h.sent, 153).result.isError, true, 'conflicting target is rejected while busy');
 
     releaseCleanup();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitFor(() => h.router._recoveryAttempt === null, 'timed-out attempt cleanup settlement');
     assert.equal(h.router._recoveryAttempt, null, 'attempt retires only after real cleanup settlement');
   });
 
@@ -226,10 +257,10 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     ]) {
       const h = makeRecoveryHarness(opts);
       reconnect(h.router, 16, 'siteA');
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      const failure = await waitForResponse(h, 16, 'invalid recovery failure');
       assert.equal(h.promoted.length, 0);
       assert.equal(h.router.degraded, true);
-      assert.equal(callResponse(h.sent, 16).result.isError, true);
+      assert.equal(failure.result.isError, true);
     }
   });
 
@@ -240,7 +271,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       pages: [{ tools: [{ name: 'constructor', inputSchema: { type: 'object' } }] }],
     });
     reconnect(valid.router, 161, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForRecovered(valid, 161, 'constructor recovery');
     assert.equal(valid.promoted.length, 1);
     assert.deepEqual(realCatalog.fullTools.map((tool) => tool.name), ['constructor']);
 
@@ -254,11 +285,12 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     };
     const failed = makeRecoveryHarness({ catalog: failingCatalog });
     reconnect(failed.router, 162, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const failedResponse = await waitForResponse(failed, 162, 'failed catalog preparation');
     assert.equal(failed.promoted.length, 0);
     assert.equal(failed.router.defaultTransport, null);
     assert.equal(failed.router.degraded, true);
     assert.equal(failingCatalog.fullTools, initialTools);
+    assert.equal(failedResponse.result.isError, true);
   });
 
   it('preserves the complete recovered catalog through the first client tools/list refresh', async () => {
@@ -267,15 +299,15 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       { forCursor: 'page-2', tools: [{ name: 'media-list', inputSchema: { type: 'object' } }] },
     ] });
     reconnect(h.router, 18, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await waitForRecovered(h, 18);
     assert.equal(h.promoted.length, 1, 'recovery completed before the client refresh');
     assert.equal(h.router.degraded, false);
     assert.equal(h.router.defaultTransport, h.transport);
     const refreshRequest = { jsonrpc: '2.0', id: 19, method: 'tools/list', params: {} };
     h.router.handleClientMessage(refreshRequest, JSON.stringify(refreshRequest));
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    const refresh = await waitForResponse(h, 19, 'first recovered tools/list refresh');
     assert.equal(h.requests.filter((entry) => entry.request.id === 19).length, 1, 'refresh reached promoted transport');
-    const refresh = callResponse(h.sent, 19);
+    assert.ok(refresh.result && Array.isArray(refresh.result.tools), 'first recovered refresh must return tools');
     const names = refresh.result.tools.map((tool) => tool.name);
     assert.ok(names.includes('content-list'));
     assert.ok(names.includes('media-list'));
@@ -287,7 +319,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     // That response must not replace the complete catalog used by browse/load.
     const stalePageRequest = { jsonrpc: '2.0', id: 21, method: 'tools/list', params: { cursor: 'page-2' } };
     h.router.handleClientMessage(stalePageRequest, JSON.stringify(stalePageRequest));
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForResponse(h, 21, 'stale cursor rejection');
     const cachedNames = h.catalog[h.catalog.length - 1].map((tool) => tool.name);
     assert.ok(cachedNames.includes('content-list'));
     assert.ok(cachedNames.includes('media-list'));
@@ -308,21 +340,24 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
         ] },
       ] });
       reconnect(h.router, enabled ? 181 : 191, 'siteA');
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await waitForRecovered(h, enabled ? 181 : 191, `reserved-name recovery (${enabled})`);
 
       // Clear the first recovered-catalog projection, then enumerate a fresh
       // remote sequence exactly as an MCP client does.
       const initial = { jsonrpc: '2.0', id: enabled ? 182 : 192, method: 'tools/list', params: {} };
       h.router.handleClientMessage(initial, JSON.stringify(initial));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      const initialResponse = await waitForResponse(h, initial.id, `initial recovered catalog (${enabled})`);
+      assert.ok(initialResponse.result && Array.isArray(initialResponse.result.tools), 'initial recovered catalog must return tools');
       const first = { jsonrpc: '2.0', id: enabled ? 183 : 193, method: 'tools/list', params: {} };
       h.router.handleClientMessage(first, JSON.stringify(first));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      const firstResponse = await waitForResponse(h, first.id, `first remote page (${enabled})`);
+      assert.ok(firstResponse.result && Array.isArray(firstResponse.result.tools), 'first remote page must return tools');
       const next = { jsonrpc: '2.0', id: enabled ? 184 : 194, method: 'tools/list', params: { cursor: 'page-2' } };
       h.router.handleClientMessage(next, JSON.stringify(next));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      const nextResponse = await waitForResponse(h, next.id, `second remote page (${enabled})`);
+      assert.ok(nextResponse.result && Array.isArray(nextResponse.result.tools), 'second remote page must return tools');
 
-      const aggregate = [first.id, next.id].flatMap((id) => callResponse(h.sent, id).result.tools.map((tool) => tool.name));
+      const aggregate = [firstResponse, nextResponse].flatMap((message) => message.result.tools.map((tool) => tool.name));
       assert.equal(new Set(aggregate).size, aggregate.length, `no duplicate tools when filtering is ${enabled}: ${aggregate.join(', ')}`);
       assert.equal(aggregate.filter((name) => name === 'wp_bridge_health').length, 1, `bridge health appears once when filtering is ${enabled}`);
       assert.ok(aggregate.includes('content-list'));
@@ -340,19 +375,20 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       ],
     });
     reconnect(h.router, 30, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForRecovered(h, 30);
 
     const initial = { jsonrpc: '2.0', id: 31, method: 'tools/list', params: {} };
     h.router.handleClientMessage(initial, JSON.stringify(initial));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(callResponse(h.sent, 31).result.tools.map((tool) => tool.name).filter((name) => !name.startsWith('wp_')), ['content-list']);
+    const initialResponse = await waitForResponse(h, 31, 'initial filtered catalog');
+    assert.ok(initialResponse.result && Array.isArray(initialResponse.result.tools), 'initial filtered catalog must return tools');
+    assert.deepEqual(initialResponse.result.tools.map((tool) => tool.name).filter((name) => !name.startsWith('wp_')), ['content-list']);
 
     // A stale second-page request cannot mutate or duplicate the retained
     // complete catalog.
     const stale = { jsonrpc: '2.0', id: 311, method: 'tools/list', params: { cursor: 'page-2' } };
     h.router.handleClientMessage(stale, JSON.stringify(stale));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(callResponse(h.sent, 311).error.code, -32603);
+    const staleResponse = await waitForResponse(h, 311, 'stale filtered cursor');
+    assert.equal(staleResponse.error.code, -32603);
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), ['content-list', 'media-list']);
 
     h.router.handleClientMessage({ jsonrpc: '2.0', id: 32, method: 'tools/call',
@@ -362,12 +398,14 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
 
     const later = { jsonrpc: '2.0', id: 33, method: 'tools/list', params: {} };
     h.router.handleClientMessage(later, JSON.stringify(later));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const laterResponse = await waitForResponse(h, 33, 'loaded-category first page');
+    assert.ok(laterResponse.result && Array.isArray(laterResponse.result.tools), 'loaded-category first page must return tools');
     const pageTwo = { jsonrpc: '2.0', id: 34, method: 'tools/list', params: { cursor: 'page-2' } };
     h.router.handleClientMessage(pageTwo, JSON.stringify(pageTwo));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const pageTwoResponse = await waitForResponse(h, 34, 'loaded-category second page');
+    assert.ok(pageTwoResponse.result && Array.isArray(pageTwoResponse.result.tools), 'loaded-category second page must return tools');
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), ['content-list', 'media-list']);
-    const aggregate = [33, 34].flatMap((id) => callResponse(h.sent, id).result.tools.map((tool) => tool.name));
+    const aggregate = [laterResponse, pageTwoResponse].flatMap((message) => message.result.tools.map((tool) => tool.name));
     assert.equal(new Set(aggregate).size, aggregate.length, 'each remote and bridge tool appears once across client pages');
     for (const name of ['content-list', 'media-list', 'wp_bridge_health', 'wp_bridge_reconnect', 'wp_browse_tools', 'wp_load_tools']) {
       assert.ok(aggregate.includes(name), `aggregate includes ${name}`);
@@ -380,12 +418,14 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       params: { name: 'wp_load_tools', arguments: { categories: [], deactivate: ['media'] } } }, '{}');
     const afterUnload = { jsonrpc: '2.0', id: 37, method: 'tools/list', params: {} };
     h.router.handleClientMessage(afterUnload, JSON.stringify(afterUnload));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(callResponse(h.sent, 37).result.tools.map((tool) => tool.name).filter((name) => !name.startsWith('wp_')), ['content-list']);
+    const afterUnloadResponse = await waitForResponse(h, 37, 'unloaded-category first page');
+    assert.ok(afterUnloadResponse.result && Array.isArray(afterUnloadResponse.result.tools), 'unloaded-category first page must return tools');
+    assert.deepEqual(afterUnloadResponse.result.tools.map((tool) => tool.name).filter((name) => !name.startsWith('wp_')), ['content-list']);
     const afterUnloadPageTwo = { jsonrpc: '2.0', id: 38, method: 'tools/list', params: { cursor: 'page-2' } };
     h.router.handleClientMessage(afterUnloadPageTwo, JSON.stringify(afterUnloadPageTwo));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const unloadedAggregate = [37, 38].flatMap((id) => callResponse(h.sent, id).result.tools.map((tool) => tool.name));
+    const afterUnloadPageTwoResponse = await waitForResponse(h, 38, 'unloaded-category second page');
+    assert.ok(afterUnloadPageTwoResponse.result && Array.isArray(afterUnloadPageTwoResponse.result.tools), 'unloaded-category second page must return tools');
+    const unloadedAggregate = [afterUnloadResponse, afterUnloadPageTwoResponse].flatMap((message) => message.result.tools.map((tool) => tool.name));
     assert.equal(new Set(unloadedAggregate).size, unloadedAggregate.length);
     assert.equal(unloadedAggregate.includes('media-list'), false, 'unloaded category stays filtered on every page');
   });
@@ -399,10 +439,10 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     config.catalog = catalog;
     const h = makeRecoveryHarness(config);
     reconnect(h.router, 60, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForRecovered(h, 60);
     const initial = { jsonrpc: '2.0', id: 61, method: 'tools/list', params: {} };
     h.router.handleClientMessage(initial, JSON.stringify(initial));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForResponse(h, 61, 'initial catalog before invalid pages');
     const previous = catalog.fullTools.map((tool) => tool.name);
 
     config.respond = (request) => request.method === 'tools/list'
@@ -410,8 +450,8 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       : undefined;
     const errorPage = { jsonrpc: '2.0', id: 62, method: 'tools/list', params: {} };
     h.router.handleClientMessage(errorPage, JSON.stringify(errorPage));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(callResponse(h.sent, 62).error.code, -32603);
+    const errorResponse = await waitForResponse(h, 62, 'remote error page');
+    assert.equal(errorResponse.error.code, -32603);
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
 
     config.respond = (request) => request.method === 'tools/list'
@@ -419,8 +459,8 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       : undefined;
     const malformed = { jsonrpc: '2.0', id: 63, method: 'tools/list', params: {} };
     h.router.handleClientMessage(malformed, JSON.stringify(malformed));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(callResponse(h.sent, 63).error.code, -32603);
+    const malformedResponse = await waitForResponse(h, 63, 'malformed page');
+    assert.equal(malformedResponse.error.code, -32603);
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
 
     // These shapes used to reach sanitizeToolsList() first.  Validate them at
@@ -431,8 +471,8 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       : undefined;
     const nullTool = { jsonrpc: '2.0', id: 631, method: 'tools/list', params: {} };
     h.router.handleClientMessage(nullTool, JSON.stringify(nullTool));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(callResponse(h.sent, 631).error.code, -32603);
+    const nullToolResponse = await waitForResponse(h, 631, 'null tool page');
+    assert.equal(nullToolResponse.error.code, -32603);
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
 
     config.respond = (request) => request.method === 'tools/list'
@@ -440,8 +480,8 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       : undefined;
     const wrongVersion = { jsonrpc: '2.0', id: 632, method: 'tools/list', params: {} };
     h.router.handleClientMessage(wrongVersion, JSON.stringify(wrongVersion));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(callResponse(h.sent, 632).error.code, -32603);
+    const wrongVersionResponse = await waitForResponse(h, 632, 'wrong-version page');
+    assert.equal(wrongVersionResponse.error.code, -32603);
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
 
     config.respond = (request) => {
@@ -450,11 +490,12 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     };
     const root = { jsonrpc: '2.0', id: 64, method: 'tools/list', params: {} };
     h.router.handleClientMessage(root, JSON.stringify(root));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const rootResponse = await waitForResponse(h, 64, 'repeated-cursor first page');
+    assert.ok(rootResponse.result && Array.isArray(rootResponse.result.tools), 'repeated-cursor first page must return tools');
     const loop = { jsonrpc: '2.0', id: 65, method: 'tools/list', params: { cursor: 'loop' } };
     h.router.handleClientMessage(loop, JSON.stringify(loop));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(callResponse(h.sent, 65).error.code, -32603);
+    const loopResponse = await waitForResponse(h, 65, 'repeated cursor page');
+    assert.equal(loopResponse.error.code, -32603);
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
   });
 
@@ -464,7 +505,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     };
     const h = makeRecoveryHarness(config);
     reconnect(h.router, 70, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForRecovered(h, 70);
     config.respond = (request) => {
       if (request.method !== 'tools/list') return undefined;
       if (!request.params || request.params.cursor === undefined) return response(request.id, { tools: [{ name: 'content-root' }], nextCursor: 'late' });
@@ -472,10 +513,12 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     };
     const recoveryRefresh = { jsonrpc: '2.0', id: 710, method: 'tools/list', params: {} };
     h.router.handleClientMessage(recoveryRefresh, JSON.stringify(recoveryRefresh));
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    const recoveryRefreshResponse = await waitForResponse(h, 710, 'initial recovered refresh before deadline test');
+    assert.ok(recoveryRefreshResponse.result && Array.isArray(recoveryRefreshResponse.result.tools), 'initial recovered refresh must return tools');
     const first = { jsonrpc: '2.0', id: 71, method: 'tools/list', params: {} };
     h.router.handleClientMessage(first, JSON.stringify(first));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const firstResponse = await waitForResponse(h, 71, 'deadline test first page');
+    assert.ok(firstResponse.result && Array.isArray(firstResponse.result.tools), 'deadline test first page must return tools');
     const pending = { jsonrpc: '2.0', id: 72, method: 'tools/list', params: { cursor: 'late' } };
     h.router.handleClientMessage(pending, JSON.stringify(pending));
     await new Promise((resolve) => setTimeout(resolve, 70));
@@ -490,7 +533,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     const config = { recoveredCatalogAssemblyTimeoutMs: 50 };
     const h = makeRecoveryHarness(config);
     reconnect(h.router, 74, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForRecovered(h, 74);
     config.respond = (request) => request.method === 'tools/list' ? null : undefined;
 
     // The post-recovery projection consumes the one initial request before a
@@ -500,7 +543,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       : undefined;
     const initial = { jsonrpc: '2.0', id: 741, method: 'tools/list', params: {} };
     h.router.handleClientMessage(initial, JSON.stringify(initial));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForResponse(h, 741, 'initial recovered refresh before first-page deadline');
     config.respond = (request) => request.method === 'tools/list' ? null : undefined;
 
     const expired = { jsonrpc: '2.0', id: 75, method: 'tools/list', params: {} };
@@ -513,7 +556,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     const first = { jsonrpc: '2.0', id: 76, method: 'tools/list', params: {} };
     const replacement = { jsonrpc: '2.0', id: 77, method: 'tools/list', params: {} };
     h.router.handleClientMessage(first, JSON.stringify(first));
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => h.requests.some((entry) => entry.request.id === 76), 'first page before supersession');
     h.router.handleClientMessage(replacement, JSON.stringify(replacement));
     assert.equal(callResponse(h.sent, 76).error.code, -32603, 'supersession settles the old first page');
     h.transport.onMessage(response(76, { tools: [{ name: 'content-old' }] }), null);
@@ -525,7 +568,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
   it('bounds unique endless pages and oversized catalogs before replacing the retained cache', async () => {
     const h = makeRecoveryHarness();
     reconnect(h.router, 73, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForRecovered(h, 73);
     const retained = h.catalog[h.catalog.length - 1];
     const assembly = h.router._startRecoveredCatalogAssembly();
     for (let page = 0; page < 100; page += 1) {
@@ -550,7 +593,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
   it('forwards a former private id only after a real client request, then drops an unsolicited duplicate', async () => {
     const h = makeRecoveryHarness();
     reconnect(h.router, 20, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForRecovered(h, 20);
     const privateId = h.requests.find((entry) => entry.request.method === 'initialize').request.id;
     const clientRequest = { jsonrpc: '2.0', id: privateId, method: 'ping', params: {} };
     h.router.handleClientMessage(clientRequest, JSON.stringify(clientRequest));
