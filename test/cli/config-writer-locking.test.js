@@ -8,6 +8,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const { freshConfig, mutateConfig, seedFromEnvIfMissing } = require('../../lib/cli/config-store');
+const { CredentialCoordinator } = require('../../lib/auth/credential-coordinator');
 const { MemorySecretStore } = require('../../lib/auth/memory-secret-store');
 
 const dirs = [];
@@ -162,5 +163,101 @@ describe('CLI config commit writers', () => {
       reclaimMarkers: 0,
     });
     assert.equal(await store.get('abilities-mcp', 'seed/apppassword'), null);
+  });
+
+  it('does not leave an ownerless active config lock when legacy recursive cleanup would partially fail', async () => {
+    const configPath = tempConfig();
+    const store = new MemorySecretStore();
+    let entered;
+    const writerEntered = new Promise((resolve) => { entered = resolve; });
+    let release;
+    const releaseWriter = new Promise((resolve) => { release = resolve; });
+    const writer = mutateConfig(configPath, 'manual-first-site', async (config) => {
+      entered();
+      await releaseWriter;
+      config.defaultSite = 'manual';
+      config.sites.manual = appPasswordSite('manual');
+    }, { initialConfig: freshConfig });
+    await writerEntered;
+
+    const originalRm = fs.promises.rm;
+    let legacyCleanupInvoked = false;
+    fs.promises.rm = async (target, options) => {
+      if (!legacyCleanupInvoked && String(target).endsWith('.config.lock') && options && options.recursive) {
+        legacyCleanupInvoked = true;
+        await fs.promises.unlink(path.join(target, 'owner.json'));
+        const error = new Error('simulated partial lock cleanup');
+        error.code = 'EPERM';
+        throw error;
+      }
+      return originalRm(target, options);
+    };
+    try {
+      const seed = seedFromEnvIfMissing(configPath, {
+        ABILITIES_MCP_URL: 'https://seed.example',
+        ABILITIES_MCP_USERNAME: 'seed',
+        ABILITIES_MCP_PASSWORD: 'seed-password',
+      }, { secretStore: store });
+      release();
+      const [, result] = await Promise.all([writer, seed]);
+
+      assert.equal(legacyCleanupInvoked, false, 'normal active-lock release no longer recursively removes the canonical lock');
+      assert.equal(result.seeded, false);
+      assert.equal(result.reason, 'exists');
+      assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(configPath, 'utf8')).sites), ['manual']);
+      assert.deepEqual(configLockLifecycle(configPath), {
+        coordinationDirectory: true,
+        configLocks: 0,
+        ownerFiles: 0,
+        reclaimMarkers: 0,
+      });
+    } finally {
+      fs.promises.rm = originalRm;
+    }
+  });
+
+  it('preserves manual config when seeding races a retired config-lock cleanup', async () => {
+    const configPath = tempConfig();
+    const store = new MemorySecretStore();
+    const retired = {};
+    retired.promise = new Promise((resolve) => { retired.resolve = resolve; });
+    const allowCleanup = {};
+    allowCleanup.promise = new Promise((resolve) => { allowCleanup.resolve = resolve; });
+    const manual = new CredentialCoordinator({
+      secretStore: {},
+      configPath,
+      deps: { lockHooks: {
+        afterOwnedLockRetired: async () => {
+          retired.resolve();
+          await allowCleanup.promise;
+        },
+      } },
+    });
+
+    const manualWrite = manual.withConfigCommitLock('manual-first-site', async ({ config }) => {
+      config.defaultSite = 'manual';
+      config.sites.manual = appPasswordSite('manual');
+      return { write: true, value: 'manual-written' };
+    }, { initialConfig: freshConfig });
+    await retired.promise;
+
+    const seeded = await seedFromEnvIfMissing(configPath, {
+      ABILITIES_MCP_URL: 'https://seed.example',
+      ABILITIES_MCP_USERNAME: 'seed',
+      ABILITIES_MCP_PASSWORD: 'seed-password',
+    }, { secretStore: store });
+    assert.equal(seeded.seeded, false);
+    assert.equal(seeded.reason, 'exists');
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(configPath, 'utf8')).sites), ['manual']);
+    assert.equal(await store.get('abilities-mcp', 'seed/apppassword'), null);
+
+    allowCleanup.resolve();
+    assert.equal(await manualWrite, 'manual-written');
+    assert.deepEqual(configLockLifecycle(configPath), {
+      coordinationDirectory: true,
+      configLocks: 0,
+      ownerFiles: 0,
+      reclaimMarkers: 0,
+    });
   });
 });

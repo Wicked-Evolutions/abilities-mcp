@@ -50,6 +50,10 @@ function deferred() {
   return { promise, resolve };
 }
 
+function credentialLockPath(root, identity) {
+  return path.join(root, `${require('node:crypto').createHash('sha256').update(identity).digest('hex')}.credential.lock`);
+}
+
 async function configuredPairFixture(root, now) {
   const store = new MemorySecretStore();
   const seed = new CredentialCoordinator({ secretStore: store, deps: { stateRoot: root } });
@@ -145,6 +149,165 @@ describe('CredentialCoordinator', () => {
     );
     release();
     await held;
+  });
+
+  it('makes a successor active before delayed retired-lock cleanup completes', async () => {
+    const root = makeRoot();
+    const identity = 'release-boundary'.repeat(4);
+    const retired = deferred();
+    const allowCleanup = deferred();
+    const first = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async ({ owner }) => {
+          retired.resolve(owner);
+          await allowCleanup.promise;
+        },
+      } },
+    });
+    const second = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const secondEntered = deferred();
+    const releaseSecond = deferred();
+
+    const firstAttempt = first.withCredentialLock(identity, 'refresh', async () => 'first-result');
+    const firstOwner = await retired.promise;
+    const secondAttempt = second.withCredentialLock(identity, 'refresh', async () => {
+      secondEntered.resolve();
+      await releaseSecond.promise;
+      return 'second-result';
+    });
+    await secondEntered.promise;
+
+    const activeOwner = JSON.parse(fs.readFileSync(path.join(credentialLockPath(root, identity), 'owner.json'), 'utf8'));
+    assert.notEqual(activeOwner.nonce, firstOwner.nonce, 'the successor owns the canonical lock while retired cleanup is paused');
+
+    allowCleanup.resolve();
+    assert.equal(await firstAttempt, 'first-result');
+    assert.equal(fs.existsSync(credentialLockPath(root, identity)), true, 'retired cleanup does not remove the successor lock');
+    releaseSecond.resolve();
+    assert.equal(await secondAttempt, 'second-result');
+  });
+
+  it('leaves only non-authoritative residue after a partial retired-cleanup fault', async () => {
+    const root = makeRoot();
+    const identity = 'release-residue'.repeat(4);
+    const retired = deferred();
+    const diagnostics = [];
+    const first = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async ({ retiredPath }) => {
+          await fs.promises.unlink(path.join(retiredPath, 'owner.json'));
+          retired.resolve(retiredPath);
+          throw new Error('simulated retired cleanup fault');
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+    const second = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const firstAttempt = first.withCredentialLock(identity, 'refresh', async () => 'committed-result');
+    const retiredPath = await retired.promise;
+    let successorEntered = false;
+    await second.withCredentialLock(identity, 'refresh', async () => { successorEntered = true; });
+
+    assert.equal(await firstAttempt, 'committed-result', 'cleanup failure does not alter the callback result');
+    assert.equal(successorEntered, true, 'a successor can acquire after the old owner has retired');
+    assert.equal(fs.existsSync(credentialLockPath(root, identity)), false, 'no ownerless canonical lock remains after the partial fault');
+    assert.equal(fs.existsSync(retiredPath), true, 'the failed cleanup leaves only the retired residue');
+    assert.deepEqual(diagnostics, ['credential_lock_retired_cleanup_failed']);
+  });
+
+  it('does not release a foreign replacement owner and preserves callback results', async () => {
+    const root = makeRoot();
+    const identity = 'release-foreign'.repeat(4);
+    const lock = credentialLockPath(root, identity);
+    const diagnostics = [];
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        beforeOwnedLockRename: async ({ lockPath }) => {
+          await fs.promises.writeFile(path.join(lockPath, 'owner.json'), JSON.stringify({ nonce: 'foreign', pid: process.pid + 1 }), { mode: 0o600 });
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+
+    assert.equal(await coordinator.withCredentialLock(identity, 'refresh', async () => 'callback-result'), 'callback-result');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')), { nonce: 'foreign', pid: process.pid + 1 });
+    assert.deepEqual(diagnostics, ['credential_lock_release_owner_changed']);
+  });
+
+  it('does not delete a changed retired owner', async () => {
+    const root = makeRoot();
+    const identity = 'release-retired-foreign'.repeat(4);
+    const diagnostics = [];
+    let retiredPath;
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async (details) => {
+          retiredPath = details.retiredPath;
+          await fs.promises.writeFile(path.join(retiredPath, 'owner.json'), JSON.stringify({ nonce: 'foreign', pid: process.pid + 1 }), { mode: 0o600 });
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+
+    assert.equal(await coordinator.withCredentialLock(identity, 'refresh', async () => 'callback-result'), 'callback-result');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(retiredPath, 'owner.json'), 'utf8')), { nonce: 'foreign', pid: process.pid + 1 });
+    assert.deepEqual(diagnostics, ['credential_lock_retired_owner_changed']);
+  });
+
+  it('retains retired locks with unexpected contents', async () => {
+    const root = makeRoot();
+    const identity = 'release-retired-contents'.repeat(4);
+    const diagnostics = [];
+    let retiredPath;
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async (details) => {
+          retiredPath = details.retiredPath;
+          await fs.promises.writeFile(path.join(retiredPath, 'unexpected'), 'keep');
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+
+    assert.equal(await coordinator.withCredentialLock(identity, 'refresh', async () => 'callback-result'), 'callback-result');
+    assert.equal(fs.existsSync(path.join(retiredPath, 'owner.json')), true);
+    assert.equal(fs.existsSync(path.join(retiredPath, 'unexpected')), true);
+    assert.deepEqual(diagnostics, ['credential_lock_retired_contents_changed']);
+  });
+
+  it('preserves the active owner and original callback error when the release rename fails', async () => {
+    const root = makeRoot();
+    const successIdentity = 'release-rename-success'.repeat(4);
+    const errorIdentity = 'release-rename-error'.repeat(4);
+    const diagnostics = [];
+    const original = new Error('original callback failure');
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        beforeOwnedLockRename: async () => { throw new Error('simulated rename failure'); },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+
+    assert.equal(await coordinator.withCredentialLock(successIdentity, 'refresh', async () => 'callback-result'), 'callback-result');
+    await assert.rejects(
+      coordinator.withCredentialLock(errorIdentity, 'refresh', async () => { throw original; }),
+      (error) => error === original
+    );
+    for (const identity of [successIdentity, errorIdentity]) {
+      const owner = JSON.parse(fs.readFileSync(path.join(credentialLockPath(root, identity), 'owner.json'), 'utf8'));
+      assert.equal(typeof owner.nonce, 'string');
+      assert.equal(owner.pid, process.pid);
+    }
+    assert.deepEqual(diagnostics, [
+      'credential_lock_release_rename_failed',
+      'credential_lock_release_rename_failed',
+    ]);
   });
 
   it('waits for a live initializer to record its owner instead of declaring interrupted recovery', async () => {
