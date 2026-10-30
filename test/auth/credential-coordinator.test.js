@@ -430,6 +430,80 @@ describe('CredentialCoordinator', () => {
     assert.deepEqual(outcome.result, { success: 'committed', preserved: true });
   });
 
+  it('keeps a delayed backpressured stderr diagnostic nonfatal', async () => {
+    const root = makeRoot();
+    const coordinatorPath = path.resolve(__dirname, '../../lib/auth/credential-coordinator.js');
+    const source = `
+      const { spawn } = require('node:child_process');
+      const { CredentialCoordinator } = require(process.argv[1]);
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      let releases = 0;
+      const coordinator = new CredentialCoordinator({
+        secretStore: {}, deps: { stateRoot: process.argv[2], lockHooks: {
+          beforeOwnedLockRename: async () => {
+            if (releases++ === 0) return;
+            const filler = spawn(process.execPath, ['-e', "const chunk = Buffer.alloc(65536, 'x'); for (;;) process.stderr.write(chunk);"], {
+              stdio: ['ignore', 'ignore', 2],
+            });
+            filler.unref();
+            await delay(1300);
+            throw new Error('simulate delayed rename failure');
+          },
+        } },
+      });
+      (async () => {
+        const success = await coordinator.withCredentialLock('stderr-delayed-success', 'refresh', async () => 'committed');
+        const original = new Error('original callback failure');
+        let preserved = false;
+        try {
+          await coordinator.withCredentialLock('stderr-delayed-error', 'refresh', async () => { throw original; });
+        } catch (error) {
+          preserved = error === original;
+        }
+        process.stdout.write(JSON.stringify({ success, preserved }) + '\\n');
+        process.stdin.resume();
+        process.stdin.once('data', () => {});
+      })().catch((error) => {
+        process.stdout.write(JSON.stringify({ unexpected: error && error.message }) + '\\n');
+        process.exitCode = 1;
+        process.stdin.resume();
+        process.stdin.once('data', () => {});
+      });
+    `;
+    const outcome = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', source, coordinatorPath, root], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let closed = false;
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(`timed out waiting for delayed backpressured diagnostic child: ${stdout}`));
+      }, 8_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (!closed && stdout.includes('\n')) {
+          setTimeout(() => {
+            closed = true;
+            child.stderr.destroy();
+            child.stdin.end('finish\n');
+          }, 1_300);
+        }
+      });
+      child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+      child.on('exit', (code) => {
+        clearTimeout(timeout);
+        let result = null;
+        try { result = JSON.parse(stdout.trim()); } catch {}
+        resolve({ code, result, stdout, closed });
+      });
+    });
+    assert.equal(outcome.closed, true, JSON.stringify(outcome));
+    assert.equal(outcome.code, 0, JSON.stringify(outcome));
+    assert.deepEqual(outcome.result, { success: 'committed', preserved: true });
+  });
+
   it('waits for a live initializer to record its owner instead of declaring interrupted recovery', async () => {
     const root = makeRoot();
     const identity = 'b'.repeat(64);
