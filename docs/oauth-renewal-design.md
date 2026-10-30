@@ -313,6 +313,25 @@ server-side desktop-keychain control is proposed. Existing bridge #104 and
 #105 retain ownership of explicit macOS keychain targeting and nonblocking
 keychain operations; this scope uses only the reads/writes needed for a pair.
 
+## Loopback callback port (#119)
+
+The original Appendix H.4.5 rule from issue #12 / PR #15 selected a random
+high port. It is superseded for this bridge by one `127.0.0.1` listener with
+`port: 0`, using the positive port the operating system assigns. RFC 8252
+permits a loopback redirect URI using an ephemeral port. Dynamic registration
+receives that exact redirect URI, and authorization-code exchange uses the
+same URI after the listener is closed during callback cleanup. The listener is
+retained through callback handling. This preserves the fresh-client guard: a
+previous client registration cannot be reused for a newly assigned port.
+
+`exclusive: true` remains on the Node listener to avoid shared cluster-handle
+use. It is not an assertion about `SO_REUSEADDR`. One failed bind produces a
+typed `loopback_bind_failed` error with `attempts: 1` and only the platform
+error code as its cause; it does not begin dynamic registration or browser
+consent. A non-positive or malformed assigned port is rejected and the
+listener is closed. No retry widening, callback-path change, PKCE/state
+relaxation, or Mycelium setting is part of this supersession.
+
 ## Tests, maintenance, and stop conditions
 
 Use memory secret storage for unit tests, plus a temporary file-backed **test
