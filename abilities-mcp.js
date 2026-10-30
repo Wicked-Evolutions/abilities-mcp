@@ -237,7 +237,8 @@ if (!isSubcommandInvocation) {
         process.stderr.write(
           `abilities-mcp: all configured sites failed to connect at boot — ` +
           `entering degraded mode. Operators can call wp_bridge_health to see ` +
-          `per-site status; reauth a site to recover.\n`
+          `per-site status, restore connectivity, then run wp_bridge_reconnect ` +
+          `with that configured site ID. Reauthorize only for an authorization failure.\n`
         );
         for (const ds of degradedSites) {
           process.stderr.write(`  - ${ds.siteId}: ${ds.reason}\n`);
@@ -257,13 +258,20 @@ if (!isSubcommandInvocation) {
     // Signal handling
     // -----------------------------------------------------------------------
 
-    function shutdown() {
+    let shuttingDown = false;
+    async function shutdown() {
+      if (shuttingDown) return;
+      shuttingDown = true;
       log('Shutting down');
-      pool.shutdownAll().then(() => {
+      // Issue #125: fence any private staged reconnect before the shared pool
+      // is torn down. This never changes normal healthy shutdown behavior.
+      try {
+        await router.beginShutdown();
+        await pool.shutdownAll();
         process.exit(0);
-      }).catch(() => {
+      } catch {
         process.exit(1);
-      });
+      }
     }
 
     process.on('SIGTERM', shutdown);
