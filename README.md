@@ -506,6 +506,34 @@ Concurrent bridge instances targeting the same site can cause session loss. Use 
 - WordPress 6.9+ with [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter) installed
 - Application Passwords enabled (default in WordPress 5.6+) for the App Password path; OAuth path needs no additional setup beyond the adapter
 
+## MCPB maintainer build
+
+Install the locked development tools before validating or building a bundle:
+
+```bash
+npm ci
+npm run validate:mcpb
+npm run pack:mcpb
+npm run verify:pack-isolation
+```
+
+Both commands use the repository's pinned local MCPB CLI; they do not download
+or substitute a global tool. The pack step preserves the official MCPB archive
+and normalizes only its validated ZIP32 DOS timestamps to `1980-01-01`, so
+identical inputs produce a reproducible unsigned bundle. It rejects archive
+layouts outside the official unsigned single-disk ZIP32 shape rather than
+rewriting them. `verify:pack-isolation` additionally proves the temporary
+keytar prebuild staging did not alter the installed keytar package.
+
+Reproducibility is for fixed inputs, the pinned toolchain, and one build
+platform; the bundle deliberately contains platform-native keytar binaries, so
+it is not a claim that independently built artifacts from different platforms
+are byte-identical. The exact MCPB `2.1.2` development pin includes two
+ancestor-scoped security overrides: Zod `4.6.7` and tmp `0.2.7`. MCPB declares
+the former's original Zod 3 range, so pack/validate compatibility is verified
+locally before using the override. Revisit and remove these narrow overrides
+when upstream MCPB supports patched dependencies directly.
+
 ## Evolving Knowledge
 
 We continuously add knowledge docs, skills, and agent patterns to [knowledge.wickedevolutions.com](https://knowledge.wickedevolutions.com).

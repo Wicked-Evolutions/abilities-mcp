@@ -32,7 +32,7 @@
   },
   "scripts": {
     "test": "node scripts/run-tests.js",
-    "validate:mcpb": "npx --yes @anthropic-ai/mcpb validate manifest.json",
+    "validate:mcpb": "node scripts/validate-mcpb.js",
     "pack:mcpb": "node scripts/pack-mcpb.js",
     "verify:pack-isolation": "node scripts/verify-pack-isolation.js"
   },
@@ -41,5 +41,20 @@
   },
   "optionalDependencies": {
     "keytar": "~7.9.0"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  },
+  "overrides": {
+    "@anthropic-ai/mcpb": {
+      "zod": "4.6.7",
+      "@inquirer/prompts": {
+        "@inquirer/editor": {
+          "external-editor": {
+            "tmp": "0.2.7"
+          }
+        }
+      }
+    }
   }
 }
