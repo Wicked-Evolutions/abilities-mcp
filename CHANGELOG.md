@@ -4,6 +4,30 @@ All notable changes to Abilities MCP are documented here.
 
 ## [Unreleased]
 
+## [1.7.0] — Proposed / unpublished
+
+### Planned
+
+- **Coordinated OAuth renewal** so concurrent bridge activity shares one
+  credential operation instead of competing refreshes.
+- **Narrowly safe pre-expiry fallback** when a proactive renewal is positively
+  proven unsent and the existing access token remains valid
+  ([#123](https://github.com/Wicked-Evolutions/abilities-mcp/pull/123)).
+- **Explicit reconnect for a degraded bridge** without repeating authorization
+  ([#126](https://github.com/Wicked-Evolutions/abilities-mcp/issues/126)).
+- **Operating-system-assigned OAuth callback ports** for safer cross-platform
+  callback startup ([#129](https://github.com/Wicked-Evolutions/abilities-mcp/issues/129)).
+- **Repeatable locked MCPB packages** using a local pinned build toolchain and
+  validated ZIP timestamp normalization ([#130](https://github.com/Wicked-Evolutions/abilities-mcp/pull/130)).
+
+### Known limitations
+
+- The Windows concurrent config-seeding failure remains under investigation in
+  [#127](https://github.com/Wicked-Evolutions/abilities-mcp/issues/127); its
+  cause is not yet known.
+- Final release acceptance remains pending combined-source verification,
+  supported-platform checks, package evidence, and staging validation.
+
 ## [1.6.6] - 2026-06-14
 
 Attach reliability. Two bugs that prevented an AI client from attaching to the bridge, plus the route-source hardening that surfaced alongside them.
