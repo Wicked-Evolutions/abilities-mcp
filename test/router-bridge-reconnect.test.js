@@ -293,17 +293,41 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.ok(cachedNames.includes('media-list'));
   });
 
-  it('does not duplicate bridge-owned names supplied by a remote page', async () => {
-    const h = makeRecoveryHarness({ pages: [{ tools: [
-      { name: 'content-list', inputSchema: { type: 'object' } },
-      { name: 'wp_bridge_health', inputSchema: { type: 'object' } },
-    ] }] });
-    reconnect(h.router, 181, 'siteA');
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const list = { jsonrpc: '2.0', id: 182, method: 'tools/list', params: {} };
-    h.router.handleClientMessage(list, JSON.stringify(list));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(callResponse(h.sent, 182).result.tools.filter((tool) => tool.name === 'wp_bridge_health').length, 1);
+  it('removes remote bridge-owned names on every page with filtering enabled or disabled', async () => {
+    for (const enabled of [true, false]) {
+      const catalog = new ToolCatalog({ toolFilter: enabled
+        ? { enabled: true, alwaysIncludeCategories: ['content'] }
+        : { enabled: false } });
+      const h = makeRecoveryHarness({ catalog, pages: [
+        { tools: [
+          { name: 'content-list', inputSchema: { type: 'object' } },
+          { name: 'wp_bridge_health', inputSchema: { type: 'object' } },
+        ], nextCursor: 'page-2' },
+        { forCursor: 'page-2', tools: [
+          { name: 'content-next', inputSchema: { type: 'object' } },
+        ] },
+      ] });
+      reconnect(h.router, enabled ? 181 : 191, 'siteA');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Clear the first recovered-catalog projection, then enumerate a fresh
+      // remote sequence exactly as an MCP client does.
+      const initial = { jsonrpc: '2.0', id: enabled ? 182 : 192, method: 'tools/list', params: {} };
+      h.router.handleClientMessage(initial, JSON.stringify(initial));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const first = { jsonrpc: '2.0', id: enabled ? 183 : 193, method: 'tools/list', params: {} };
+      h.router.handleClientMessage(first, JSON.stringify(first));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const next = { jsonrpc: '2.0', id: enabled ? 184 : 194, method: 'tools/list', params: { cursor: 'page-2' } };
+      h.router.handleClientMessage(next, JSON.stringify(next));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const aggregate = [first.id, next.id].flatMap((id) => callResponse(h.sent, id).result.tools.map((tool) => tool.name));
+      assert.equal(new Set(aggregate).size, aggregate.length, `no duplicate tools when filtering is ${enabled}: ${aggregate.join(', ')}`);
+      assert.equal(aggregate.filter((name) => name === 'wp_bridge_health').length, 1, `bridge health appears once when filtering is ${enabled}`);
+      assert.ok(aggregate.includes('content-list'));
+      assert.ok(aggregate.includes('content-next'));
+    }
   });
 
   it('keeps recovered complete categories coherent across later pagination and load/unload notifications', async () => {
@@ -399,6 +423,27 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.equal(callResponse(h.sent, 63).error.code, -32603);
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
 
+    // These shapes used to reach sanitizeToolsList() first.  Validate them at
+    // the protocol boundary so malformed pages return one client error without
+    // throwing or replacing the complete cache.
+    config.respond = (request) => request.method === 'tools/list'
+      ? { jsonrpc: '2.0', id: request.id, result: { tools: [null] } }
+      : undefined;
+    const nullTool = { jsonrpc: '2.0', id: 631, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(nullTool, JSON.stringify(nullTool));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(callResponse(h.sent, 631).error.code, -32603);
+    assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
+
+    config.respond = (request) => request.method === 'tools/list'
+      ? { jsonrpc: '1.0', id: request.id, result: { tools: [{ name: 'content-wrong-version' }] } }
+      : undefined;
+    const wrongVersion = { jsonrpc: '2.0', id: 632, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(wrongVersion, JSON.stringify(wrongVersion));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(callResponse(h.sent, 632).error.code, -32603);
+    assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
+
     config.respond = (request) => {
       if (request.method !== 'tools/list') return undefined;
       return response(request.id, { tools: [{ name: request.params && request.params.cursor ? 'content-next' : 'content-root' }], nextCursor: 'loop' });
@@ -439,6 +484,42 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.equal(h.requests.filter((entry) => entry.request.id === 72).length, 1, 'id reuse remains blocked until late transport settlement');
     h.transport.onMessage(response(72, { tools: [{ name: 'late-tool' }] }), null);
     assert.equal(h.sent.filter((message) => message.id === 72).length, 2, 'late response is suppressed after the timeout error');
+  });
+
+  it('settles a first-page client request exactly once on expiry or supersession', async () => {
+    const config = { recoveredCatalogAssemblyTimeoutMs: 50 };
+    const h = makeRecoveryHarness(config);
+    reconnect(h.router, 74, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    config.respond = (request) => request.method === 'tools/list' ? null : undefined;
+
+    // The post-recovery projection consumes the one initial request before a
+    // client begins a newly assembled remote enumeration.
+    config.respond = (request) => request.method === 'tools/list'
+      ? response(request.id, { tools: [{ name: 'content-initial' }] })
+      : undefined;
+    const initial = { jsonrpc: '2.0', id: 741, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(initial, JSON.stringify(initial));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    config.respond = (request) => request.method === 'tools/list' ? null : undefined;
+
+    const expired = { jsonrpc: '2.0', id: 75, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(expired, JSON.stringify(expired));
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    assert.equal(callResponse(h.sent, 75).error.code, -32603, 'first page receives an expiry response');
+    h.transport.onMessage(response(75, { tools: [{ name: 'content-late' }] }), null);
+    assert.equal(h.sent.filter((message) => message.id === 75).length, 1, 'late first-page response is suppressed');
+
+    const first = { jsonrpc: '2.0', id: 76, method: 'tools/list', params: {} };
+    const replacement = { jsonrpc: '2.0', id: 77, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(first, JSON.stringify(first));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    h.router.handleClientMessage(replacement, JSON.stringify(replacement));
+    assert.equal(callResponse(h.sent, 76).error.code, -32603, 'supersession settles the old first page');
+    h.transport.onMessage(response(76, { tools: [{ name: 'content-old' }] }), null);
+    assert.equal(h.sent.filter((message) => message.id === 76).length, 1, 'superseded first-page response is suppressed');
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    assert.equal(callResponse(h.sent, 77).error.code, -32603, 'replacement first page has its own bounded deadline');
   });
 
   it('bounds unique endless pages and oversized catalogs before replacing the retained cache', async () => {
