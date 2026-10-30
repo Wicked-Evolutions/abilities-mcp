@@ -440,7 +440,7 @@ describe('CredentialCoordinator', () => {
       let releases = 0;
       let filler = null;
       async function stopFiller() {
-        if (!filler || filler.exitCode !== null) return;
+        if (!filler || filler.exitCode !== null || filler.signalCode !== null) return;
         const exited = new Promise((resolve) => filler.once('exit', resolve));
         filler.kill();
         if (await Promise.race([exited.then(() => true), delay(500).then(() => false)])) return;
@@ -491,19 +491,30 @@ describe('CredentialCoordinator', () => {
       let closeScheduled = false;
       let fillerPid = null;
       let closeTimer = null;
+      let fillerStopped = false;
+      let timeoutError = null;
+      let childError = null;
+      const stopOwnedFiller = () => {
+        if (!fillerPid || fillerStopped) return;
+        try { process.kill(fillerPid, 'SIGKILL'); } catch {}
+      };
+      const stopOwnedPipes = () => {
+        try { child.stdin.destroy(); } catch {}
+        try { child.stderr.destroy(); } catch {}
+      };
       const timeout = setTimeout(() => {
-        child.kill();
+        timeoutError = new Error(`timed out waiting for delayed backpressured diagnostic child: ${stdout}`);
         if (closeTimer) clearTimeout(closeTimer);
-        if (fillerPid) {
-          try { process.kill(fillerPid, 'SIGKILL'); } catch {}
-        }
-        reject(new Error(`timed out waiting for delayed backpressured diagnostic child: ${stdout}`));
+        stopOwnedFiller();
+        stopOwnedPipes();
+        child.kill();
       }, 8_000);
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk) => {
         stdout += chunk;
         const match = stdout.match(/filler:(\d+)/);
         if (match) fillerPid = Number(match[1]);
+        if (stdout.includes('filler-stopped\n')) fillerStopped = true;
         if (!closeScheduled && stdout.split('\n').some((line) => line.startsWith('{'))) {
           closeScheduled = true;
           closeTimer = setTimeout(() => {
@@ -513,20 +524,86 @@ describe('CredentialCoordinator', () => {
           }, 1_300);
         }
       });
-      child.on('error', (error) => { clearTimeout(timeout); reject(error); });
-      child.on('exit', (code) => {
+      child.on('error', (error) => {
+        childError = error;
+        if (closeTimer) clearTimeout(closeTimer);
+        stopOwnedFiller();
+        stopOwnedPipes();
+        child.kill();
+      });
+      child.on('exit', () => {
+        if (!fillerStopped) {
+          stopOwnedFiller();
+          stopOwnedPipes();
+        }
+      });
+      child.on('close', (code) => {
         clearTimeout(timeout);
         if (closeTimer) clearTimeout(closeTimer);
+        if (!fillerStopped) stopOwnedFiller();
+        if (timeoutError) return reject(timeoutError);
+        if (childError) return reject(childError);
         const resultLine = stdout.split('\n').find((line) => line.startsWith('{'));
         let result = null;
         try { result = JSON.parse(resultLine); } catch {}
-        resolve({ code, result, stdout, closed });
+        resolve({ code, result, stdout, closed, fillerStopped });
       });
     });
     assert.equal(outcome.closed, true, JSON.stringify(outcome));
+    assert.equal(outcome.fillerStopped, true, JSON.stringify(outcome));
     assert.equal(outcome.code, 0, JSON.stringify(outcome));
     assert.deepEqual(outcome.result, { success: 'committed', preserved: true });
     assert.match(outcome.stdout, /filler-stopped/);
+  });
+
+  it('cleans the owned delayed-pipe helper after an early main-child exit', async () => {
+    const source = `
+      const { spawn } = require('node:child_process');
+      const filler = spawn(process.execPath, ['-e', "const chunk = Buffer.alloc(65536, 'x'); let remaining = 128; process.stderr.on('error', () => process.exit(0)); function write() { if (remaining-- <= 0) return; if (process.stderr.write(chunk)) setImmediate(write); else process.stderr.once('drain', write); } write();"], {
+        stdio: ['ignore', 'ignore', 2],
+      });
+      process.stdout.write('filler:' + filler.pid + '\\n');
+      setTimeout(() => process.exit(0), 25);
+    `;
+    const outcome = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', source], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let fillerPid = null;
+      let timedOut = false;
+      const stopOwnedFiller = () => {
+        if (!fillerPid) return;
+        try { process.kill(fillerPid, 'SIGKILL'); } catch {}
+      };
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        stopOwnedFiller();
+        child.kill();
+        child.stderr.destroy();
+      }, 3_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        const match = String(chunk).match(/filler:(\d+)/);
+        if (match) fillerPid = Number(match[1]);
+      });
+      child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+      child.on('exit', () => {
+        stopOwnedFiller();
+        child.stderr.destroy();
+      });
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        if (timedOut) return reject(new Error('timed out waiting for early-exit helper cleanup'));
+        resolve({ code, fillerPid });
+      });
+    });
+    assert.equal(outcome.code, 0);
+    assert.equal(Number.isInteger(outcome.fillerPid), true);
+    let exited = false;
+    for (let attempt = 0; attempt < 20 && !exited; attempt += 1) {
+      try { process.kill(outcome.fillerPid, 0); }
+      catch (error) { exited = error && error.code === 'ESRCH'; }
+      if (!exited) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(exited, true, 'the captured helper PID is gone after early-exit cleanup');
   });
 
   it('waits for a live initializer to record its owner instead of declaring interrupted recovery', async () => {
