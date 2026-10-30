@@ -419,8 +419,8 @@ describe('config-migration.migrateFile', () => {
       withLockCalls += 1;
       return originalWithLock.call(this, lockPath, ...args);
     };
-    fs.mkdirSync(lock, { recursive: true, mode: 0o700 });
     try {
+      fs.mkdirSync(lock, { recursive: true, mode: 0o700 });
       await assert.rejects(
         migrateFile({ filePath: file, secretStore: store }),
         (error) => error.code === 'write_failed' && error.cause && error.cause.code === 'credential_recovery_interrupted'
