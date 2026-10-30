@@ -280,6 +280,64 @@ describe('CredentialCoordinator', () => {
     assert.deepEqual(diagnostics, ['credential_lock_retired_contents_changed']);
   });
 
+  it('does not follow a substituted retired-lock directory symlink', async (t) => {
+    const root = makeRoot();
+    const probeTarget = path.join(root, 'symlink-probe-target');
+    const probeLink = path.join(root, 'symlink-probe-link');
+    fs.mkdirSync(probeTarget);
+    try {
+      fs.symlinkSync(probeTarget, probeLink, 'dir');
+      fs.unlinkSync(probeLink);
+    } catch (error) {
+      if (error && error.code === 'EPERM') {
+        t.skip('the current Windows policy does not permit test directory symlinks');
+        return;
+      }
+      throw error;
+    }
+
+    const identity = 'release-retired-symlink'.repeat(4);
+    const substituted = deferred();
+    const allowValidation = deferred();
+    const diagnostics = [];
+    const first = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async ({ retiredPath }) => {
+          const originalPath = `${retiredPath}.original`;
+          const unrelatedPath = path.join(root, 'unrelated-lock-target');
+          await fs.promises.rename(retiredPath, originalPath);
+          await fs.promises.mkdir(unrelatedPath);
+          await fs.promises.copyFile(path.join(originalPath, 'owner.json'), path.join(unrelatedPath, 'owner.json'));
+          await fs.promises.symlink(unrelatedPath, retiredPath, 'dir');
+          substituted.resolve({ retiredPath, originalPath, unrelatedPath });
+          await allowValidation.promise;
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+    const second = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const secondEntered = deferred();
+    const releaseSecond = deferred();
+    const firstAttempt = first.withCredentialLock(identity, 'refresh', async () => 'committed-result');
+    const paths = await substituted.promise;
+    const secondAttempt = second.withCredentialLock(identity, 'refresh', async () => {
+      secondEntered.resolve();
+      await releaseSecond.promise;
+    });
+    await secondEntered.promise;
+
+    allowValidation.resolve();
+    assert.equal(await firstAttempt, 'committed-result');
+    assert.equal(fs.lstatSync(paths.retiredPath).isSymbolicLink(), true);
+    assert.equal(fs.existsSync(path.join(paths.originalPath, 'owner.json')), true, 'the original retired directory is retained');
+    assert.equal(fs.existsSync(path.join(paths.unrelatedPath, 'owner.json')), true, 'the unrelated target is never followed or deleted');
+    assert.equal(fs.existsSync(credentialLockPath(root, identity)), true, 'the successor remains at the canonical lock path');
+    assert.deepEqual(diagnostics, ['credential_lock_retired_owner_changed']);
+    releaseSecond.resolve();
+    await secondAttempt;
+  });
+
   it('preserves the active owner and original callback error when the release rename fails', async () => {
     const root = makeRoot();
     const successIdentity = 'release-rename-success'.repeat(4);
@@ -308,6 +366,68 @@ describe('CredentialCoordinator', () => {
       'credential_lock_release_rename_failed',
       'credential_lock_release_rename_failed',
     ]);
+  });
+
+  it('keeps release diagnostics nonfatal after the stderr pipe is closed', async () => {
+    const root = makeRoot();
+    const coordinatorPath = path.resolve(__dirname, '../../lib/auth/credential-coordinator.js');
+    const source = `
+      const { CredentialCoordinator } = require(process.argv[1]);
+      const root = process.argv[2];
+      const coordinator = new CredentialCoordinator({
+        secretStore: {},
+        deps: { stateRoot: root, lockHooks: {
+          beforeOwnedLockRename: async () => { throw new Error('simulate rename failure'); },
+        } },
+      });
+      process.stdout.write('ready\\n');
+      process.stdin.once('data', async () => {
+        try {
+          const success = await coordinator.withCredentialLock('stderr-success', 'refresh', async () => 'committed');
+          const original = new Error('original callback failure');
+          let preserved = false;
+          try {
+            await coordinator.withCredentialLock('stderr-error', 'refresh', async () => { throw original; });
+          } catch (error) {
+            preserved = error === original;
+          }
+          process.stdout.write(JSON.stringify({ success, preserved }) + '\\n');
+        } catch (error) {
+          process.stdout.write(JSON.stringify({ unexpected: error && error.message }) + '\\n');
+          process.exitCode = 1;
+        }
+      });
+    `;
+    const outcome = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', source, coordinatorPath, root], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let sent = false;
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error('timed out waiting for closed-stderr diagnostic child'));
+      }, 3_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (!sent && stdout.includes('ready\n')) {
+          sent = true;
+          child.stderr.destroy();
+          child.stdin.end('go\n');
+        }
+      });
+      child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+      child.on('exit', (code) => {
+        clearTimeout(timeout);
+        const lines = stdout.trim().split('\n');
+        let result = null;
+        try { result = JSON.parse(lines.at(-1)); } catch {}
+        resolve({ code, result, stdout });
+      });
+    });
+    assert.equal(outcome.code, 0, JSON.stringify(outcome));
+    assert.deepEqual(outcome.result, { success: 'committed', preserved: true });
   });
 
   it('waits for a live initializer to record its owner instead of declaring interrupted recovery', async () => {

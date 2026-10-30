@@ -205,9 +205,10 @@ atomically renames only that owned directory to a unique same-directory
 `.lock.released.<id>` path before best-effort cleanup. The canonical path is
 therefore immediately available to a successor even if cleanup is delayed or
 fails. Cleanup rereads the retired owner and accepts only the expected
-`owner.json`; an unexpected or changed retired directory is retained. Release
-diagnostics use stable codes only and never change the completed operation's
-result, credential state, or configuration.
+`owner.json` from the same real, non-symlink directory; an unexpected or
+changed retired directory is retained. Release diagnostics use stable codes
+only and never change the completed operation's result, credential state, or
+configuration.
 
 Before any server refresh, the coordinator stores a non-secret
 `refresh_attempt` marker under the global lock **before the first HTTP send**:
