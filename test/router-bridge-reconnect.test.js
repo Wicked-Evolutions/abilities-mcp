@@ -50,7 +50,7 @@ function makeRecoveryHarness(opts = {}) {
             if (request.method === 'tools/list') {
               const cursor = request.params && request.params.cursor;
               const page = cursor === undefined ? pages[0] : pages.find((p) => p.forCursor === cursor);
-              this.onMessage(response(request.id, page || { tools: [] }), null);
+              this.onMessage(response(request.id, JSON.parse(JSON.stringify(page || { tools: [] }))), null);
             }
           }, delay);
         },
@@ -284,13 +284,66 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.ok(cachedNames.includes('media-list'));
   });
 
-  it('does not suppress a normal response that reuses a former private recovery id', async () => {
+  it('keeps recovered complete categories coherent across later pagination and load/unload notifications', async () => {
+    const catalog = new ToolCatalog({ toolFilter: { enabled: true, alwaysIncludeCategories: ['content'] } });
+    const h = makeRecoveryHarness({
+      catalog,
+      pages: [
+        { tools: [{ name: 'content-list', inputSchema: { type: 'object' } }], nextCursor: 'page-2' },
+        { forCursor: 'page-2', tools: [{ name: 'media-list', inputSchema: { type: 'object' } }] },
+      ],
+    });
+    reconnect(h.router, 30, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const initial = { jsonrpc: '2.0', id: 31, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(initial, JSON.stringify(initial));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(callResponse(h.sent, 31).result.tools.map((tool) => tool.name).filter((name) => !name.startsWith('wp_')), ['content-list']);
+
+    // A stale second-page request must still honour the current category
+    // filter, rather than exposing unloaded media tools or replacing cache.
+    const stale = { jsonrpc: '2.0', id: 311, method: 'tools/list', params: { cursor: 'page-2' } };
+    h.router.handleClientMessage(stale, JSON.stringify(stale));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(callResponse(h.sent, 311).result.tools.some((tool) => tool.name === 'media-list'), false);
+    assert.deepEqual(catalog.fullTools.map((tool) => tool.name), ['content-list', 'media-list']);
+
+    h.router.handleClientMessage({ jsonrpc: '2.0', id: 32, method: 'tools/call',
+      params: { name: 'wp_load_tools', arguments: { categories: ['media'] } } }, '{}');
+    assert.equal(callResponse(h.sent, 32).result.isError, undefined);
+    assert.ok(h.sent.some((message) => message.method === 'notifications/tools/list_changed'));
+
+    const later = { jsonrpc: '2.0', id: 33, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(later, JSON.stringify(later));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const pageTwo = { jsonrpc: '2.0', id: 34, method: 'tools/list', params: { cursor: 'page-2' } };
+    h.router.handleClientMessage(pageTwo, JSON.stringify(pageTwo));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(catalog.fullTools.map((tool) => tool.name), ['content-list', 'media-list']);
+
+    h.router.handleClientMessage({ jsonrpc: '2.0', id: 35, method: 'tools/call',
+      params: { name: 'wp_browse_tools', arguments: {} } }, '{}');
+    assert.match(callResponse(h.sent, 35).result.content[0].text, /media \(1 tools\)/);
+    h.router.handleClientMessage({ jsonrpc: '2.0', id: 36, method: 'tools/call',
+      params: { name: 'wp_load_tools', arguments: { categories: [], deactivate: ['media'] } } }, '{}');
+    const afterUnload = { jsonrpc: '2.0', id: 37, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(afterUnload, JSON.stringify(afterUnload));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(callResponse(h.sent, 37).result.tools.map((tool) => tool.name).filter((name) => !name.startsWith('wp_')), ['content-list']);
+  });
+
+  it('forwards a former private id only after a real client request, then drops an unsolicited duplicate', async () => {
     const h = makeRecoveryHarness();
     reconnect(h.router, 20, 'siteA');
     await new Promise((resolve) => setTimeout(resolve, 20));
     const privateId = h.requests.find((entry) => entry.request.method === 'initialize').request.id;
+    const clientRequest = { jsonrpc: '2.0', id: privateId, method: 'ping', params: {} };
+    h.router.handleClientMessage(clientRequest, JSON.stringify(clientRequest));
     h.transport.onMessage(response(privateId, { content: [{ type: 'text', text: 'ordinary collision' }] }), null);
     assert.equal(callResponse(h.sent, privateId).result.content[0].text, 'ordinary collision');
+    h.transport.onMessage(response(privateId, { content: [{ type: 'text', text: 'late duplicate' }] }), null);
+    assert.equal(h.sent.filter((message) => message.id === privateId).length, 1);
   });
 
   it('cancels a staged attempt during shutdown and never allows a late promotion', async () => {
