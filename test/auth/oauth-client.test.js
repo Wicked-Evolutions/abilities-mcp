@@ -2,14 +2,16 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 
 const { OAuthClient, DEFAULT_SCOPE } = require('../../lib/auth/oauth-client');
+const { LoopbackServer } = require('../../lib/auth/loopback-server');
 const { TokenManager } = require('../../lib/auth/token-manager');
 const { FreshEachTimeIdentityProvider } = require('../../lib/auth/fresh-each-time-identity');
 const { MemorySecretStore } = require('../../lib/auth/memory-secret-store');
 const { postForm } = require('../../lib/auth/http-json');
 const { STATES } = require('../../lib/auth/events');
-const { AuthError, CapabilityPinningError } = require('../../lib/auth/errors');
+const { CapabilityPinningError } = require('../../lib/auth/errors');
 const { MockAuthServer } = require('./helpers/mock-auth-server');
 
 function newIdp() {
@@ -87,12 +89,19 @@ describe('OAuthClient — full flow against MockAuthServer', () => {
   it('does not register a client or launch a browser when loopback binding fails', async () => {
     let registrationCalls = 0;
     let browserCalls = 0;
-    const bindCause = Object.assign(new Error('machine-local bind detail'), { code: 'EACCES' });
-    class FailingLoopbackServer {
-      async start() {
-        throw new AuthError('Loopback server failed to bind an OS-assigned callback port after 1 attempt', {
-          code: 'loopback_bind_failed', cause: { code: bindCause.code },
-        });
+    let bindAttempts = 0;
+    class EaccesLoopbackServer extends LoopbackServer {
+      constructor(args) {
+        const fakeServer = new EventEmitter();
+        fakeServer.listen = () => {
+          bindAttempts += 1;
+          process.nextTick(() => {
+            const cause = new Error('machine-local bind detail');
+            cause.code = 'EACCES';
+            fakeServer.emit('error', cause);
+          });
+        };
+        super({ ...args, serverFactory: () => fakeServer });
       }
     }
     const client = new OAuthClient({
@@ -102,16 +111,19 @@ describe('OAuthClient — full flow against MockAuthServer', () => {
       identityProvider: newIdp(),
       allowInsecure: true,
       deps: {
-        LoopbackServer: FailingLoopbackServer,
+        LoopbackServer: EaccesLoopbackServer,
         register: async () => { registrationCalls += 1; },
         openBrowser: async () => { browserCalls += 1; },
       },
     });
     await assert.rejects(client.run(), (error) => {
       assert.equal(error.code, 'loopback_bind_failed');
+      assert.equal(error.attempts, 1);
       assert.deepEqual(error.cause, { code: 'EACCES' });
+      assert.doesNotMatch(error.message, /machine-local bind detail/);
       return true;
     });
+    assert.equal(bindAttempts, 1);
     assert.equal(registrationCalls, 0);
     assert.equal(browserCalls, 0);
     assert.equal(client.state, STATES.FAILED);

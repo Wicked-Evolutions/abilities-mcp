@@ -320,9 +320,9 @@ high port. It is superseded for this bridge by one `127.0.0.1` listener with
 `port: 0`, using the positive port the operating system assigns. RFC 8252
 permits a loopback redirect URI using an ephemeral port. Dynamic registration
 receives that exact redirect URI, and authorization-code exchange uses the
-same listener and URI until callback cleanup. This preserves the fresh-client
-guard: a previous client registration cannot be reused for a newly assigned
-port.
+same URI after the listener is closed during callback cleanup. The listener is
+retained through callback handling. This preserves the fresh-client guard: a
+previous client registration cannot be reused for a newly assigned port.
 
 `exclusive: true` remains on the Node listener to avoid shared cluster-handle
 use. It is not an assertion about `SO_REUSEADDR`. One failed bind produces a

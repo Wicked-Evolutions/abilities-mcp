@@ -95,9 +95,10 @@ describe('LoopbackServer', () => {
 
   it('reports one safe typed bind failure when the assigned port is invalid', async () => {
     const fakeServer = new EventEmitter();
+    let closeCalls = 0;
     fakeServer.listen = (_options, callback) => callback();
     fakeServer.address = () => ({ port: 0 });
-    fakeServer.close = (callback) => callback();
+    fakeServer.close = (callback) => { closeCalls += 1; callback(); };
     const server = new LoopbackServer({
       expectedState: generateState(),
       serverFactory: () => fakeServer,
@@ -109,6 +110,8 @@ describe('LoopbackServer', () => {
       assert.deepEqual(error.cause, { code: 'loopback_invalid_port' });
       return true;
     });
+    assert.equal(closeCalls, 1);
+    assert.equal(server._server, null);
   });
 
   it('rejects with timeout error when no callback arrives in window', async () => {
