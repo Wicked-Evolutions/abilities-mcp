@@ -71,7 +71,17 @@ async function exerciseShutdown(kind) {
   let main; let otherServer; let stderr = ''; let output = '';
   const child = spawn(process.execPath, ['--require', PRELOAD, BIN, `--config=${configPath}`], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, XDG_STATE_HOME: stateHome, FIXTURE_PERSIST_PATH: persistPath, FIXTURE_PERSIST_DELAY_MS: '300' },
+    // Keep both platform-specific coordinator state roots inside this child’s
+    // disposable directory. Windows uses LOCALAPPDATA rather than XDG state;
+    // leaving it inherited lets the EOF and SIGTERM children contend for a
+    // runner-global fixture identity.
+    env: {
+      ...process.env,
+      XDG_STATE_HOME: stateHome,
+      LOCALAPPDATA: stateHome,
+      FIXTURE_PERSIST_PATH: persistPath,
+      FIXTURE_PERSIST_DELAY_MS: '300',
+    },
   });
   child.stderr.on('data', (chunk) => { stderr += String(chunk); });
   child.stdout.on('data', (chunk) => { output += String(chunk); });
@@ -115,8 +125,18 @@ async function exerciseShutdown(kind) {
 }
 
 describe('entrypoint recovery shutdown', () => {
-  it('waits for a held config-backed credential write on EOF and SIGTERM', async () => {
+  it('waits for a held config-backed credential write on EOF', async () => {
     await exerciseShutdown('EOF');
+  });
+
+  it('waits for a held config-backed credential write on SIGTERM', {
+    // Node documents SIGTERM as forceful process termination on Windows, so it
+    // cannot prove a JavaScript graceful-shutdown path there. EOF above runs
+    // on every platform and provides the portable settlement evidence.
+    skip: process.platform === 'win32'
+      ? 'Windows SIGTERM is forceful termination, not a graceful JS signal'
+      : false,
+  }, async () => {
     await exerciseShutdown('SIGTERM');
   });
 });
