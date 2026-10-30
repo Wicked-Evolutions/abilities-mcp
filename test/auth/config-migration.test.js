@@ -386,7 +386,7 @@ describe('config-migration.migrateFile', () => {
     }
   });
 
-  it('keeps an ownerless config lock fail-closed even when the file is valid v2', async () => {
+  it('keeps an ownerless config lock fail-closed even when the file is valid v2', async (t) => {
     const root = tmpConfigRoot();
     const file = path.join(root, 'wp-sites.json');
     const v2 = {
@@ -400,16 +400,42 @@ describe('config-migration.migrateFile', () => {
       },
     };
     fs.writeFileSync(file, JSON.stringify(v2));
-    const realPath = fs.realpathSync(file);
+    // Use the same existing-file canonicalization that withConfigCommitLock()
+    // uses before it hashes the config path. On Windows, realpathSync() and
+    // fs.promises.realpath() can spell an existing path differently.
+    const realPath = path.join(await fs.promises.realpath(path.resolve(file)));
     const lock = path.join(path.dirname(realPath), '.abilities-mcp-coordination',
       `${crypto.createHash('sha256').update(realPath).digest('hex')}.config.lock`);
-    fs.mkdirSync(lock, { recursive: true, mode: 0o700 });
+    const legacySyncPath = fs.realpathSync(file);
+    const legacySyncLock = path.join(path.dirname(legacySyncPath), '.abilities-mcp-coordination',
+      `${crypto.createHash('sha256').update(legacySyncPath).digest('hex')}.config.lock`);
+    const originalConfigBytes = fs.readFileSync(file);
+    const store = new CountingStore();
+    const originalWithLock = CredentialCoordinator.prototype._withLock;
+    let observedLockPath = null;
+    let withLockCalls = 0;
+    CredentialCoordinator.prototype._withLock = function observeConfigLock(lockPath, ...args) {
+      observedLockPath = lockPath;
+      withLockCalls += 1;
+      return originalWithLock.call(this, lockPath, ...args);
+    };
     try {
+      fs.mkdirSync(lock, { recursive: true, mode: 0o700 });
       await assert.rejects(
-        migrateFile({ filePath: file, secretStore: new CountingStore() }),
+        migrateFile({ filePath: file, secretStore: store }),
         (error) => error.code === 'write_failed' && error.cause && error.cause.code === 'credential_recovery_interrupted'
       );
+      assert.equal(withLockCalls, 1, 'migration attempts the config lock once');
+      assert.equal(observedLockPath, lock, 'fixture blocks the production-derived config lock target');
+      assert.deepEqual(fs.readFileSync(file), originalConfigBytes, 'the valid v2 config remains unchanged');
+      assert.deepEqual(fs.readdirSync(lock), [], 'the ownerless lock remains untouched');
+      assert.equal(store.sets, 0, 'the blocked migration writes no secrets');
+      assert.equal(fs.existsSync(`${file}.v1.bak`), false, 'the blocked migration creates no backup');
+      if (legacySyncLock !== lock) {
+        t.diagnostic(`ownerless_lock_canonicalization legacy_sha256=${crypto.createHash('sha256').update(legacySyncLock).digest('hex')} production_sha256=${crypto.createHash('sha256').update(lock).digest('hex')}`);
+      }
     } finally {
+      CredentialCoordinator.prototype._withLock = originalWithLock;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
