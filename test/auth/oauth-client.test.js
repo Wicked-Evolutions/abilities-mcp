@@ -9,7 +9,7 @@ const { FreshEachTimeIdentityProvider } = require('../../lib/auth/fresh-each-tim
 const { MemorySecretStore } = require('../../lib/auth/memory-secret-store');
 const { postForm } = require('../../lib/auth/http-json');
 const { STATES } = require('../../lib/auth/events');
-const { CapabilityPinningError } = require('../../lib/auth/errors');
+const { AuthError, CapabilityPinningError } = require('../../lib/auth/errors');
 const { MockAuthServer } = require('./helpers/mock-auth-server');
 
 function newIdp() {
@@ -82,6 +82,39 @@ describe('OAuthClient — full flow against MockAuthServer', () => {
     const r = await client.run();
     assert.equal(typeof DEFAULT_SCOPE, 'string');
     assert.deepEqual(r.scopes.sort(), ['abilities:read', 'abilities:write'].sort());
+  });
+
+  it('does not register a client or launch a browser when loopback binding fails', async () => {
+    let registrationCalls = 0;
+    let browserCalls = 0;
+    const bindCause = Object.assign(new Error('machine-local bind detail'), { code: 'EACCES' });
+    class FailingLoopbackServer {
+      async start() {
+        throw new AuthError('Loopback server failed to bind an OS-assigned callback port after 1 attempt', {
+          code: 'loopback_bind_failed', cause: { code: bindCause.code },
+        });
+      }
+    }
+    const client = new OAuthClient({
+      siteUrl: server.siteUrl,
+      clientName: 'Test',
+      softwareVersion: '1.4.0',
+      identityProvider: newIdp(),
+      allowInsecure: true,
+      deps: {
+        LoopbackServer: FailingLoopbackServer,
+        register: async () => { registrationCalls += 1; },
+        openBrowser: async () => { browserCalls += 1; },
+      },
+    });
+    await assert.rejects(client.run(), (error) => {
+      assert.equal(error.code, 'loopback_bind_failed');
+      assert.deepEqual(error.cause, { code: 'EACCES' });
+      return true;
+    });
+    assert.equal(registrationCalls, 0);
+    assert.equal(browserCalls, 0);
+    assert.equal(client.state, STATES.FAILED);
   });
 
   it('anchors initial token expiry to the authorization-code request start', async () => {

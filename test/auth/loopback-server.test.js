@@ -3,9 +3,10 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { EventEmitter } = require('node:events');
 
-const { LoopbackServer, PORT_MIN, PORT_MAX } = require('../../lib/auth/loopback-server');
-const { StateMismatchError, UserDeniedError } = require('../../lib/auth/errors');
+const { LoopbackServer } = require('../../lib/auth/loopback-server');
+const { AuthError, StateMismatchError, UserDeniedError } = require('../../lib/auth/errors');
 const { generateState } = require('../../lib/auth/pkce');
 
 function get(url) {
@@ -19,11 +20,27 @@ function get(url) {
 }
 
 describe('LoopbackServer', () => {
-  it('binds on a port within [49152, 65535]', async () => {
+  it('uses a positive OS-assigned loopback port', async () => {
     const server = new LoopbackServer({ expectedState: generateState() });
     const { port } = await server.start();
-    assert.ok(port >= PORT_MIN && port <= PORT_MAX, `port ${port} out of range`);
+    assert.ok(Number.isInteger(port) && port > 0 && port <= 65_535, `invalid assigned port ${port}`);
+    assert.equal(new URL(server.redirectUri).port, String(port));
     await server.stop();
+  });
+
+  it('allocates distinct ports for concurrent listeners and releases each port on stop', async () => {
+    const a = new LoopbackServer({ expectedState: generateState() });
+    const b = new LoopbackServer({ expectedState: generateState() });
+    const [first, second] = await Promise.all([a.start(), b.start()]);
+    assert.notEqual(first.port, second.port);
+    await Promise.all([a.stop(), b.stop()]);
+
+    const reusable = http.createServer();
+    await new Promise((resolve, reject) => {
+      reusable.once('error', reject);
+      reusable.listen({ host: '127.0.0.1', port: first.port, exclusive: true }, resolve);
+    });
+    await new Promise((resolve) => reusable.close(resolve));
   });
 
   it('resolves waitForCallback with valid {code, state}', async () => {
@@ -67,23 +84,31 @@ describe('LoopbackServer', () => {
     await server.stop();
   });
 
-  it('uses exclusive bind so a second listener on the same port fails', async () => {
-    // Pin a specific port via portFn, expect the second start to throw.
-    let port;
-    const a = new LoopbackServer({
-      expectedState: generateState(),
-      portFn: () => 50000 + Math.floor(Math.random() * 10000),
-    });
+  it('rejects an explicitly occupied exact port without changing its listener', async () => {
+    const a = new LoopbackServer({ expectedState: generateState() });
     const startedA = await a.start();
-    port = startedA.port;
-
-    const b = new LoopbackServer({
-      expectedState: generateState(),
-      portFn: () => port,
-      bindRetries: 0,
-    });
-    await assert.rejects(b.start(), /failed to bind|EADDRINUSE/i);
+    const b = new LoopbackServer({ expectedState: generateState() });
+    await assert.rejects(b._listen(startedA.port), (error) => error && error.code === 'EADDRINUSE');
+    assert.equal(a.redirectUri, `http://127.0.0.1:${startedA.port}/callback`);
     await a.stop();
+  });
+
+  it('reports one safe typed bind failure when the assigned port is invalid', async () => {
+    const fakeServer = new EventEmitter();
+    fakeServer.listen = (_options, callback) => callback();
+    fakeServer.address = () => ({ port: 0 });
+    fakeServer.close = (callback) => callback();
+    const server = new LoopbackServer({
+      expectedState: generateState(),
+      serverFactory: () => fakeServer,
+    });
+    await assert.rejects(server.start(), (error) => {
+      assert.ok(error instanceof AuthError);
+      assert.equal(error.code, 'loopback_bind_failed');
+      assert.equal(error.attempts, 1);
+      assert.deepEqual(error.cause, { code: 'loopback_invalid_port' });
+      return true;
+    });
   });
 
   it('rejects with timeout error when no callback arrives in window', async () => {
