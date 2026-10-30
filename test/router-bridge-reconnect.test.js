@@ -3,6 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { McpRouter } = require('../lib/router');
+const { ToolCatalog } = require('../lib/tool-catalog');
 
 function tick() {
   return new Promise((resolve) => setImmediate(resolve));
@@ -17,7 +18,7 @@ function makeRecoveryHarness(opts = {}) {
   const requests = [];
   const created = [];
   const promoted = [];
-  const catalog = [];
+  const cachedCatalogs = [];
   const pages = opts.pages || [
     { tools: [{ name: 'content-list', inputSchema: { type: 'object' } }] },
   ];
@@ -58,16 +59,19 @@ function makeRecoveryHarness(opts = {}) {
     },
     promoteStagedTransport(site, staged) { promoted.push({ site, staged }); },
   };
+  const catalog = opts.catalog || {
+    isEnabled: () => true,
+    prepareTools: (tools) => ({ tools }),
+    installPreparedTools: (prepared) => cachedCatalogs.push(prepared.tools),
+    cacheTools: (tools) => cachedCatalogs.push(tools),
+    getFilteredTools: () => cachedCatalogs[cachedCatalogs.length - 1] || [],
+  };
   const router = new McpRouter({
     config: { defaultSite: 'siteA', sites: { siteA: {}, siteB: {} } },
     siteKeys: ['siteA', 'siteB'],
     isMultiSite: true,
     pool,
-    catalog: {
-      isEnabled: () => true,
-      cacheTools: (tools) => catalog.push(tools),
-      getFilteredTools: () => catalog[catalog.length - 1] || [],
-    },
+    catalog,
     sendToClient: (line) => sent.push(JSON.parse(line)),
     log: () => {},
     recoveryTimeoutMs: opts.recoveryTimeoutMs,
@@ -79,7 +83,7 @@ function makeRecoveryHarness(opts = {}) {
   }, '{}');
   router.handleClientMessage({ jsonrpc: '2.0', method: 'initialized', params: {} }, '{}');
 
-  return { router, sent, requests, created, promoted, catalog, get transport() { return transport; } };
+  return { router, sent, requests, created, promoted, catalog: cachedCatalogs, catalogImpl: catalog, get transport() { return transport; } };
 }
 
 function reconnect(router, id, site = 'siteA') {
@@ -220,6 +224,34 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     }
   });
 
+  it('prepares a valid constructor-named tool before promotion and leaves live state untouched when preparation fails', async () => {
+    const realCatalog = new ToolCatalog({ toolFilter: { enabled: true, alwaysIncludeCategories: ['constructor'] } });
+    const valid = makeRecoveryHarness({
+      catalog: realCatalog,
+      pages: [{ tools: [{ name: 'constructor', inputSchema: { type: 'object' } }] }],
+    });
+    reconnect(valid.router, 161, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(valid.promoted.length, 1);
+    assert.deepEqual(realCatalog.fullTools.map((tool) => tool.name), ['constructor']);
+
+    const initialTools = [{ name: 'content-list' }];
+    const failingCatalog = {
+      fullTools: initialTools,
+      isEnabled: () => true,
+      prepareTools() { throw new Error('catalog preparation failed'); },
+      installPreparedTools() { throw new Error('must not install'); },
+      getFilteredTools() { return initialTools; },
+    };
+    const failed = makeRecoveryHarness({ catalog: failingCatalog });
+    reconnect(failed.router, 162, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(failed.promoted.length, 0);
+    assert.equal(failed.router.defaultTransport, null);
+    assert.equal(failed.router.degraded, true);
+    assert.equal(failingCatalog.fullTools, initialTools);
+  });
+
   it('preserves the complete recovered catalog through the first client tools/list refresh', async () => {
     const h = makeRecoveryHarness({ pages: [
       { tools: [{ name: 'content-list', inputSchema: { type: 'object' } }], nextCursor: 'page-2' },
@@ -239,7 +271,26 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.ok(names.includes('content-list'));
     assert.ok(names.includes('media-list'));
     assert.ok(names.includes('wp_bridge_reconnect'));
+    assert.equal(Object.hasOwn(refresh.result, 'nextCursor'), false, 'complete refresh cannot retain the remote first-page cursor');
     assert.equal(refresh.result.tools.find((tool) => tool.name === 'content-list').inputSchema.properties.site.type, 'string');
+
+    // An already-running client may nevertheless send the stale later cursor.
+    // That response must not replace the complete catalog used by browse/load.
+    const stalePageRequest = { jsonrpc: '2.0', id: 21, method: 'tools/list', params: { cursor: 'page-2' } };
+    h.router.handleClientMessage(stalePageRequest, JSON.stringify(stalePageRequest));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const cachedNames = h.catalog[h.catalog.length - 1].map((tool) => tool.name);
+    assert.ok(cachedNames.includes('content-list'));
+    assert.ok(cachedNames.includes('media-list'));
+  });
+
+  it('does not suppress a normal response that reuses a former private recovery id', async () => {
+    const h = makeRecoveryHarness();
+    reconnect(h.router, 20, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const privateId = h.requests.find((entry) => entry.request.method === 'initialize').request.id;
+    h.transport.onMessage(response(privateId, { content: [{ type: 'text', text: 'ordinary collision' }] }), null);
+    assert.equal(callResponse(h.sent, privateId).result.content[0].text, 'ordinary collision');
   });
 
   it('cancels a staged attempt during shutdown and never allows a late promotion', async () => {
