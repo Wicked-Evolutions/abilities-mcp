@@ -418,13 +418,26 @@ If multiple are set: `passwordEnv` → `passwordCommand` → `password`.
 
 ## Bridge Tools
 
-The bridge provides three built-in tools (not forwarded to WordPress):
+The bridge provides four built-in tools (not forwarded to WordPress):
 
 | Tool | Description |
 |------|-------------|
 | `wp_bridge_health` | Check connectivity status of all configured WordPress sites |
+| `wp_bridge_reconnect` | Recover a completed degraded startup for one explicitly named configured site |
 | `wp_browse_tools` | List WordPress tool categories with counts (requires `toolFilter.enabled: true`) |
 | `wp_load_tools` | Activate/deactivate tool categories for lazy loading |
+
+### Recovering a completed degraded startup
+
+If the bridge started in degraded mode and the site is reachable again, call
+`wp_bridge_reconnect` with the exact configured site ID. The bridge reconnects
+only that site, privately validates MCP initialization and every page of its
+tool catalog, then announces one catalog refresh. It does not contact another
+configured site, force a token refresh, reset authorization state, or change
+OAuth consent. A healthy bridge cannot use this tool to switch its default
+site. Recovery currently supports OAuth-configured sites only; legacy carrier
+types are rejected before a connection is attempted. Reauthorize only when the
+site reports an authorization failure.
 
 ## Usage
 
