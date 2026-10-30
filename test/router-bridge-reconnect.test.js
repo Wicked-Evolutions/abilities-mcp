@@ -42,6 +42,7 @@ function makeRecoveryHarness(opts = {}) {
             if (request.method === 'initialize') {
               this.onMessage(response(request.id, opts.initializeResult || {
                 protocolVersion: '2025-06-18', capabilities: { tools: {} },
+                serverInfo: { name: 'fixture', version: '1.0.0' },
               }), null);
               return;
             }
@@ -65,7 +66,7 @@ function makeRecoveryHarness(opts = {}) {
     catalog: {
       isEnabled: () => true,
       cacheTools: (tools) => catalog.push(tools),
-      getFilteredTools: () => [],
+      getFilteredTools: () => catalog[catalog.length - 1] || [],
     },
     sendToClient: (line) => sent.push(JSON.parse(line)),
     log: () => {},
@@ -124,6 +125,32 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.equal(callResponse(h.sent, 11).result.isError, true);
   });
 
+  it('does not reserve high JSON-RPC ids from ordinary client responses', () => {
+    const h = makeRecoveryHarness();
+    h.router.handleTransportMessage(response(1000000999, { content: [{ type: 'text', text: 'normal high id' }] }), null);
+    assert.equal(callResponse(h.sent, 1000000999).result.content[0].text, 'normal high id');
+  });
+
+  it('binds private correlation to the staged transport and drops unexpected staged messages', async () => {
+    const h = makeRecoveryHarness({ hang: true, recoveryTimeoutMs: 100 });
+    reconnect(h.router, 111, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const privateId = h.requests.find((entry) => entry.request.method === 'initialize').request.id;
+
+    // A matching id from the normal transport is an ordinary client response,
+    // not a private recovery reply. It cannot advance the attempt.
+    h.router.handleTransportMessage(response(privateId, {
+      protocolVersion: '2025-06-18', capabilities: { tools: {} },
+      serverInfo: { name: 'wrong-transport', version: '1.0.0' },
+    }), null);
+    assert.ok(callResponse(h.sent, privateId));
+    assert.equal(h.router._recoveryRequests.has(privateId), true);
+
+    h.transport.onMessage(response(42, { ignored: true }), null);
+    assert.equal(h.sent.some((message) => message.id === 42), false, 'unrecognized staged message remains private');
+    h.router.beginShutdown();
+  });
+
   it('coalesces same-target callers, rejects a conflict, and notifies once', async () => {
     const h = makeRecoveryHarness({ delayMs: 10 });
     reconnect(h.router, 12, 'siteA');
@@ -147,8 +174,9 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.equal(h.promoted.length, 0);
     assert.equal(h.router.degraded, true);
 
-    h.router.handleTransportMessage(response(1000000001, {
+    h.transport.onMessage(response(1000000001, {
       protocolVersion: '2025-06-18', capabilities: { tools: {} },
+      serverInfo: { name: 'fixture', version: '1.0.0' },
     }), null);
     assert.equal(h.sent.some((message) => message.id === 1000000001), false);
   });
@@ -170,7 +198,7 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.equal(callResponse(h.sent, 153).result.isError, true, 'conflicting target is rejected while busy');
 
     releaseCleanup();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(h.router._recoveryAttempt, null, 'attempt retires only after real cleanup settlement');
   });
 
@@ -190,6 +218,28 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
       assert.equal(h.router.degraded, true);
       assert.equal(callResponse(h.sent, 16).result.isError, true);
     }
+  });
+
+  it('preserves the complete recovered catalog through the first client tools/list refresh', async () => {
+    const h = makeRecoveryHarness({ pages: [
+      { tools: [{ name: 'content-list', inputSchema: { type: 'object' } }], nextCursor: 'page-2' },
+      { forCursor: 'page-2', tools: [{ name: 'media-list', inputSchema: { type: 'object' } }] },
+    ] });
+    reconnect(h.router, 18, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(h.promoted.length, 1, 'recovery completed before the client refresh');
+    assert.equal(h.router.degraded, false);
+    assert.equal(h.router.defaultTransport, h.transport);
+    const refreshRequest = { jsonrpc: '2.0', id: 19, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(refreshRequest, JSON.stringify(refreshRequest));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(h.requests.filter((entry) => entry.request.id === 19).length, 1, 'refresh reached promoted transport');
+    const refresh = callResponse(h.sent, 19);
+    const names = refresh.result.tools.map((tool) => tool.name);
+    assert.ok(names.includes('content-list'));
+    assert.ok(names.includes('media-list'));
+    assert.ok(names.includes('wp_bridge_reconnect'));
+    assert.equal(refresh.result.tools.find((tool) => tool.name === 'content-list').inputSchema.properties.site.type, 'string');
   });
 
   it('cancels a staged attempt during shutdown and never allows a late promotion', async () => {

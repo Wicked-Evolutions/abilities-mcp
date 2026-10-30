@@ -116,4 +116,23 @@ describe('OAuth staged-recovery cancellation (#125)', () => {
     await waitFor(() => aborted === 1);
     assert.equal(received, 1, 'aborted discovery does not issue a later probe');
   });
+
+  it('closes a trickling 3xx discovery body before trying the next probe', async () => {
+    let firstSocketClosed = 0;
+    let requests = 0;
+    const { url } = await makeServer((req, res) => {
+      requests += 1;
+      if (requests === 1) {
+        req.socket.on('close', () => { firstSocketClosed += 1; });
+        res.writeHead(302, { Location: '/elsewhere' });
+        res.write('trickle');
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    await assert.rejects(() => discover(url, { allowInsecure: true }));
+    await waitFor(() => firstSocketClosed === 1);
+    assert.ok(requests >= 2, 'discovery may continue only after closing the redirect body socket');
+  });
 });

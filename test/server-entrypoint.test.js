@@ -27,7 +27,7 @@ function writeCapturePreload(filePath) {
       async delete() { throw new Error('test must not access the operator Keychain'); }
     }
     Module._load = function(request, parent, isMain) {
-      if (request === './lib/auth/keychain-secret-store' || request === './keychain-secret-store') {
+      if (request === './lib/auth/keychain-secret-store' || request === './auth/keychain-secret-store' || request === './keychain-secret-store') {
         return { KeychainSecretStore: ForbiddenKeychainSecretStore };
       }
       if (request === './lib/connection-pool' && parent && parent.filename === process.env.ABILITIES_MCP_BRIDGE_BIN) {
@@ -63,6 +63,7 @@ function writeRecoveryPreload(filePath) {
               if (request.method === 'initialize') {
                 queueMicrotask(() => transport.onMessage({ jsonrpc: '2.0', id: request.id, result: {
                   protocolVersion: '2025-06-18', capabilities: { tools: {} },
+                  serverInfo: { name: 'fixture', version: '1.0.0' },
                 } }, null));
               } else if (request.method === 'tools/list') {
                 queueMicrotask(() => transport.onMessage({ jsonrpc: '2.0', id: request.id, result: {
