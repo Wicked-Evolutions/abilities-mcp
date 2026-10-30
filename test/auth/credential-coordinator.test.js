@@ -50,6 +50,10 @@ function deferred() {
   return { promise, resolve };
 }
 
+function credentialLockPath(root, identity) {
+  return path.join(root, `${require('node:crypto').createHash('sha256').update(identity).digest('hex')}.credential.lock`);
+}
+
 async function configuredPairFixture(root, now) {
   const store = new MemorySecretStore();
   const seed = new CredentialCoordinator({ secretStore: store, deps: { stateRoot: root } });
@@ -145,6 +149,470 @@ describe('CredentialCoordinator', () => {
     );
     release();
     await held;
+  });
+
+  it('makes a successor active before delayed retired-lock cleanup completes', async () => {
+    const root = makeRoot();
+    const identity = 'release-boundary'.repeat(4);
+    const retired = deferred();
+    const allowCleanup = deferred();
+    const first = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async ({ owner }) => {
+          retired.resolve(owner);
+          await allowCleanup.promise;
+        },
+      } },
+    });
+    const second = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const secondEntered = deferred();
+    const releaseSecond = deferred();
+
+    const firstAttempt = first.withCredentialLock(identity, 'refresh', async () => 'first-result');
+    const firstOwner = await retired.promise;
+    const secondAttempt = second.withCredentialLock(identity, 'refresh', async () => {
+      secondEntered.resolve();
+      await releaseSecond.promise;
+      return 'second-result';
+    });
+    await secondEntered.promise;
+
+    const activeOwner = JSON.parse(fs.readFileSync(path.join(credentialLockPath(root, identity), 'owner.json'), 'utf8'));
+    assert.notEqual(activeOwner.nonce, firstOwner.nonce, 'the successor owns the canonical lock while retired cleanup is paused');
+
+    allowCleanup.resolve();
+    assert.equal(await firstAttempt, 'first-result');
+    assert.equal(fs.existsSync(credentialLockPath(root, identity)), true, 'retired cleanup does not remove the successor lock');
+    releaseSecond.resolve();
+    assert.equal(await secondAttempt, 'second-result');
+  });
+
+  it('leaves only non-authoritative residue after a partial retired-cleanup fault', async () => {
+    const root = makeRoot();
+    const identity = 'release-residue'.repeat(4);
+    const retired = deferred();
+    const diagnostics = [];
+    const first = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async ({ retiredPath }) => {
+          await fs.promises.unlink(path.join(retiredPath, 'owner.json'));
+          retired.resolve(retiredPath);
+          throw new Error('simulated retired cleanup fault');
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+    const second = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const firstAttempt = first.withCredentialLock(identity, 'refresh', async () => 'committed-result');
+    const retiredPath = await retired.promise;
+    let successorEntered = false;
+    await second.withCredentialLock(identity, 'refresh', async () => { successorEntered = true; });
+
+    assert.equal(await firstAttempt, 'committed-result', 'cleanup failure does not alter the callback result');
+    assert.equal(successorEntered, true, 'a successor can acquire after the old owner has retired');
+    assert.equal(fs.existsSync(credentialLockPath(root, identity)), false, 'no ownerless canonical lock remains after the partial fault');
+    assert.equal(fs.existsSync(retiredPath), true, 'the failed cleanup leaves only the retired residue');
+    assert.deepEqual(diagnostics, ['credential_lock_retired_cleanup_failed']);
+  });
+
+  it('does not release a foreign replacement owner and preserves callback results', async () => {
+    const root = makeRoot();
+    const identity = 'release-foreign'.repeat(4);
+    const lock = credentialLockPath(root, identity);
+    const diagnostics = [];
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        beforeOwnedLockRename: async ({ lockPath }) => {
+          await fs.promises.writeFile(path.join(lockPath, 'owner.json'), JSON.stringify({ nonce: 'foreign', pid: process.pid + 1 }), { mode: 0o600 });
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+
+    assert.equal(await coordinator.withCredentialLock(identity, 'refresh', async () => 'callback-result'), 'callback-result');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')), { nonce: 'foreign', pid: process.pid + 1 });
+    assert.deepEqual(diagnostics, ['credential_lock_release_owner_changed']);
+  });
+
+  it('does not delete a changed retired owner', async () => {
+    const root = makeRoot();
+    const identity = 'release-retired-foreign'.repeat(4);
+    const diagnostics = [];
+    let retiredPath;
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async (details) => {
+          retiredPath = details.retiredPath;
+          await fs.promises.writeFile(path.join(retiredPath, 'owner.json'), JSON.stringify({ nonce: 'foreign', pid: process.pid + 1 }), { mode: 0o600 });
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+
+    assert.equal(await coordinator.withCredentialLock(identity, 'refresh', async () => 'callback-result'), 'callback-result');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(retiredPath, 'owner.json'), 'utf8')), { nonce: 'foreign', pid: process.pid + 1 });
+    assert.deepEqual(diagnostics, ['credential_lock_retired_owner_changed']);
+  });
+
+  it('retains retired locks with unexpected contents', async () => {
+    const root = makeRoot();
+    const identity = 'release-retired-contents'.repeat(4);
+    const diagnostics = [];
+    let retiredPath;
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async (details) => {
+          retiredPath = details.retiredPath;
+          await fs.promises.writeFile(path.join(retiredPath, 'unexpected'), 'keep');
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+
+    assert.equal(await coordinator.withCredentialLock(identity, 'refresh', async () => 'callback-result'), 'callback-result');
+    assert.equal(fs.existsSync(path.join(retiredPath, 'owner.json')), true);
+    assert.equal(fs.existsSync(path.join(retiredPath, 'unexpected')), true);
+    assert.deepEqual(diagnostics, ['credential_lock_retired_contents_changed']);
+  });
+
+  it('does not follow a substituted retired-lock directory symlink', async (t) => {
+    const root = makeRoot();
+    const probeTarget = path.join(root, 'symlink-probe-target');
+    const probeLink = path.join(root, 'symlink-probe-link');
+    fs.mkdirSync(probeTarget);
+    try {
+      fs.symlinkSync(probeTarget, probeLink, 'dir');
+      fs.unlinkSync(probeLink);
+    } catch (error) {
+      if (error && error.code === 'EPERM') {
+        t.skip('the current Windows policy does not permit test directory symlinks');
+        return;
+      }
+      throw error;
+    }
+
+    const identity = 'release-retired-symlink'.repeat(4);
+    const substituted = deferred();
+    const allowValidation = deferred();
+    const diagnostics = [];
+    const first = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        afterOwnedLockRetired: async ({ retiredPath }) => {
+          const originalPath = `${retiredPath}.original`;
+          const unrelatedPath = path.join(root, 'unrelated-lock-target');
+          await fs.promises.rename(retiredPath, originalPath);
+          await fs.promises.mkdir(unrelatedPath);
+          await fs.promises.copyFile(path.join(originalPath, 'owner.json'), path.join(unrelatedPath, 'owner.json'));
+          await fs.promises.symlink(unrelatedPath, retiredPath, 'dir');
+          substituted.resolve({ retiredPath, originalPath, unrelatedPath });
+          await allowValidation.promise;
+        },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+    const second = new CredentialCoordinator({ secretStore: new MemorySecretStore(), deps: { stateRoot: root } });
+    const secondEntered = deferred();
+    const releaseSecond = deferred();
+    const firstAttempt = first.withCredentialLock(identity, 'refresh', async () => 'committed-result');
+    const paths = await substituted.promise;
+    const secondAttempt = second.withCredentialLock(identity, 'refresh', async () => {
+      secondEntered.resolve();
+      await releaseSecond.promise;
+    });
+    await secondEntered.promise;
+
+    allowValidation.resolve();
+    assert.equal(await firstAttempt, 'committed-result');
+    assert.equal(fs.lstatSync(paths.retiredPath).isSymbolicLink(), true);
+    assert.equal(fs.existsSync(path.join(paths.originalPath, 'owner.json')), true, 'the original retired directory is retained');
+    assert.equal(fs.existsSync(path.join(paths.unrelatedPath, 'owner.json')), true, 'the unrelated target is never followed or deleted');
+    assert.equal(fs.existsSync(credentialLockPath(root, identity)), true, 'the successor remains at the canonical lock path');
+    assert.deepEqual(diagnostics, ['credential_lock_retired_owner_changed']);
+    releaseSecond.resolve();
+    await secondAttempt;
+  });
+
+  it('preserves the active owner and original callback error when the release rename fails', async () => {
+    const root = makeRoot();
+    const successIdentity = 'release-rename-success'.repeat(4);
+    const errorIdentity = 'release-rename-error'.repeat(4);
+    const diagnostics = [];
+    const original = new Error('original callback failure');
+    const coordinator = new CredentialCoordinator({
+      secretStore: new MemorySecretStore(),
+      deps: { stateRoot: root, lockHooks: {
+        beforeOwnedLockRename: async () => { throw new Error('simulated rename failure'); },
+        ownedLockReleaseDiagnostic: async ({ code }) => diagnostics.push(code),
+      } },
+    });
+
+    assert.equal(await coordinator.withCredentialLock(successIdentity, 'refresh', async () => 'callback-result'), 'callback-result');
+    await assert.rejects(
+      coordinator.withCredentialLock(errorIdentity, 'refresh', async () => { throw original; }),
+      (error) => error === original
+    );
+    for (const identity of [successIdentity, errorIdentity]) {
+      const owner = JSON.parse(fs.readFileSync(path.join(credentialLockPath(root, identity), 'owner.json'), 'utf8'));
+      assert.equal(typeof owner.nonce, 'string');
+      assert.equal(owner.pid, process.pid);
+    }
+    assert.deepEqual(diagnostics, [
+      'credential_lock_release_rename_failed',
+      'credential_lock_release_rename_failed',
+    ]);
+  });
+
+  it('keeps release diagnostics nonfatal after the stderr pipe is closed', async () => {
+    const root = makeRoot();
+    const coordinatorPath = path.resolve(__dirname, '../../lib/auth/credential-coordinator.js');
+    const source = `
+      const { CredentialCoordinator } = require(process.argv[1]);
+      const root = process.argv[2];
+      const coordinator = new CredentialCoordinator({
+        secretStore: {},
+        deps: { stateRoot: root, lockHooks: {
+          beforeOwnedLockRename: async () => { throw new Error('simulate rename failure'); },
+        } },
+      });
+      process.stdout.write('ready\\n');
+      process.stdin.once('data', async () => {
+        try {
+          const success = await coordinator.withCredentialLock('stderr-success', 'refresh', async () => 'committed');
+          const original = new Error('original callback failure');
+          let preserved = false;
+          try {
+            await coordinator.withCredentialLock('stderr-error', 'refresh', async () => { throw original; });
+          } catch (error) {
+            preserved = error === original;
+          }
+          process.stdout.write(JSON.stringify({ success, preserved }) + '\\n');
+        } catch (error) {
+          process.stdout.write(JSON.stringify({ unexpected: error && error.message }) + '\\n');
+          process.exitCode = 1;
+        }
+      });
+    `;
+    const outcome = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', source, coordinatorPath, root], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let sent = false;
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error('timed out waiting for closed-stderr diagnostic child'));
+      }, 3_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (!sent && stdout.includes('ready\n')) {
+          sent = true;
+          child.stderr.destroy();
+          child.stdin.end('go\n');
+        }
+      });
+      child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+      child.on('exit', (code) => {
+        clearTimeout(timeout);
+        const lines = stdout.trim().split('\n');
+        let result = null;
+        try { result = JSON.parse(lines.at(-1)); } catch {}
+        resolve({ code, result, stdout });
+      });
+    });
+    assert.equal(outcome.code, 0, JSON.stringify(outcome));
+    assert.deepEqual(outcome.result, { success: 'committed', preserved: true });
+  });
+
+  it('keeps a delayed backpressured stderr diagnostic nonfatal', async () => {
+    const root = makeRoot();
+    const coordinatorPath = path.resolve(__dirname, '../../lib/auth/credential-coordinator.js');
+    const source = `
+      const { spawn } = require('node:child_process');
+      const { CredentialCoordinator } = require(process.argv[1]);
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      let releases = 0;
+      let filler = null;
+      async function stopFiller() {
+        if (!filler || filler.exitCode !== null || filler.signalCode !== null) return;
+        const exited = new Promise((resolve) => filler.once('exit', resolve));
+        filler.kill();
+        if (await Promise.race([exited.then(() => true), delay(500).then(() => false)])) return;
+        filler.kill('SIGKILL');
+        await exited;
+      }
+      async function finish(result) {
+        process.stdout.write(JSON.stringify(result) + '\\n');
+        process.stdin.resume();
+        await new Promise((resolve) => process.stdin.once('data', resolve));
+        await stopFiller();
+        process.stdout.write('filler-stopped\\n');
+      }
+      const coordinator = new CredentialCoordinator({
+        secretStore: {}, deps: { stateRoot: process.argv[2], lockHooks: {
+          beforeOwnedLockRename: async () => {
+            if (releases++ === 0) return;
+            filler = spawn(process.execPath, ['-e', "const chunk = Buffer.alloc(65536, 'x'); let remaining = 128; process.stderr.on('error', () => process.exit(0)); function write() { if (remaining-- <= 0) return; if (process.stderr.write(chunk)) setImmediate(write); else process.stderr.once('drain', write); } write();"], {
+              stdio: ['ignore', 'ignore', 2],
+            });
+            process.stdout.write('filler:' + filler.pid + '\\n');
+            await delay(1300);
+            throw new Error('simulate delayed rename failure');
+          },
+        } },
+      });
+      (async () => {
+        const success = await coordinator.withCredentialLock('stderr-delayed-success', 'refresh', async () => 'committed');
+        const original = new Error('original callback failure');
+        let preserved = false;
+        try {
+          await coordinator.withCredentialLock('stderr-delayed-error', 'refresh', async () => { throw original; });
+        } catch (error) {
+          preserved = error === original;
+        }
+        await finish({ success, preserved });
+      })().catch((error) => {
+        process.exitCode = 1;
+        finish({ unexpected: error && error.message }).catch(() => {});
+      });
+    `;
+    const outcome = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', source, coordinatorPath, root], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let closed = false;
+      let closeScheduled = false;
+      let fillerPid = null;
+      let closeTimer = null;
+      let fillerStopped = false;
+      let timeoutError = null;
+      let childError = null;
+      let mainExited = false;
+      const stopOwnedFiller = () => {
+        if (!fillerPid || fillerStopped) return;
+        try { process.kill(fillerPid, 'SIGKILL'); } catch {}
+      };
+      const stopOwnedPipes = () => {
+        try { child.stdin.destroy(); } catch {}
+        try { child.stderr.destroy(); } catch {}
+      };
+      const timeout = setTimeout(() => {
+        timeoutError = new Error(`timed out waiting for delayed backpressured diagnostic child: ${stdout}`);
+        if (closeTimer) clearTimeout(closeTimer);
+        stopOwnedFiller();
+        stopOwnedPipes();
+        child.kill();
+      }, 8_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        const match = stdout.match(/filler:(\d+)/);
+        if (match) fillerPid = Number(match[1]);
+        if (stdout.includes('filler-stopped\n')) fillerStopped = true;
+        if (mainExited && !fillerStopped) {
+          stopOwnedFiller();
+          stopOwnedPipes();
+        }
+        if (!closeScheduled && stdout.split('\n').some((line) => line.startsWith('{'))) {
+          closeScheduled = true;
+          closeTimer = setTimeout(() => {
+            closed = true;
+            child.stderr.destroy();
+            child.stdin.end('finish\n');
+          }, 1_300);
+        }
+      });
+      child.on('error', (error) => {
+        childError = error;
+        if (closeTimer) clearTimeout(closeTimer);
+        stopOwnedFiller();
+        stopOwnedPipes();
+        child.kill();
+      });
+      child.on('exit', () => {
+        mainExited = true;
+        if (!fillerStopped) {
+          stopOwnedFiller();
+          stopOwnedPipes();
+        }
+      });
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        if (closeTimer) clearTimeout(closeTimer);
+        if (!fillerStopped) stopOwnedFiller();
+        if (timeoutError) return reject(timeoutError);
+        if (childError) return reject(childError);
+        const resultLine = stdout.split('\n').find((line) => line.startsWith('{'));
+        let result = null;
+        try { result = JSON.parse(resultLine); } catch {}
+        resolve({ code, result, stdout, closed, fillerStopped });
+      });
+    });
+    assert.equal(outcome.closed, true, JSON.stringify(outcome));
+    assert.equal(outcome.fillerStopped, true, JSON.stringify(outcome));
+    assert.equal(outcome.code, 0, JSON.stringify(outcome));
+    assert.deepEqual(outcome.result, { success: 'committed', preserved: true });
+    assert.match(outcome.stdout, /filler-stopped/);
+  });
+
+  it('cleans the owned delayed-pipe helper after an early main-child exit', async () => {
+    const source = `
+      const { spawn } = require('node:child_process');
+      const filler = spawn(process.execPath, ['-e', "const chunk = Buffer.alloc(65536, 'x'); let remaining = 128; process.stderr.on('error', () => process.exit(0)); function write() { if (remaining-- <= 0) return; if (process.stderr.write(chunk)) setImmediate(write); else process.stderr.once('drain', write); } write();"], {
+        stdio: ['ignore', 'ignore', 2],
+      });
+      process.stdout.write('filler:' + filler.pid + '\\n');
+      setTimeout(() => process.exit(0), 25);
+    `;
+    const outcome = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', source], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let fillerPid = null;
+      let timedOut = false;
+      let mainExited = false;
+      const stopOwnedFiller = () => {
+        if (!fillerPid) return;
+        try { process.kill(fillerPid, 'SIGKILL'); } catch {}
+      };
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        stopOwnedFiller();
+        child.kill();
+        child.stderr.destroy();
+      }, 3_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => {
+        const match = String(chunk).match(/filler:(\d+)/);
+        if (match) fillerPid = Number(match[1]);
+        if (mainExited) stopOwnedFiller();
+      });
+      child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+      child.on('exit', () => {
+        mainExited = true;
+        stopOwnedFiller();
+        child.stderr.destroy();
+      });
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        if (timedOut) return reject(new Error('timed out waiting for early-exit helper cleanup'));
+        resolve({ code, fillerPid });
+      });
+    });
+    assert.equal(outcome.code, 0);
+    assert.equal(Number.isInteger(outcome.fillerPid), true);
+    let exited = false;
+    for (let attempt = 0; attempt < 20 && !exited; attempt += 1) {
+      try { process.kill(outcome.fillerPid, 0); }
+      catch (error) { exited = error && error.code === 'ESRCH'; }
+      if (!exited) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(exited, true, 'the captured helper PID is gone after early-exit cleanup');
   });
 
   it('waits for a live initializer to record its owner instead of declaring interrupted recovery', async () => {
