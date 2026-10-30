@@ -184,6 +184,12 @@ participates: runtime refresh/status changes, `add-site`, `reauth`,
 writer rereads and validates current config under the global lock, applies only
 its narrow change, then publishes it with the generation fence.
 
+Initial local bridge-config conversion uses that same commit lock. If a second
+conversion exhausts its bounded busy wait, it may report the existing no-op
+result only after a read-only check of the same canonical target confirms a
+complete, schema-valid v2 object (not merely a version field); it never lifts
+secrets, writes a backup, or repairs a live lock on that path.
+
 A lock with a readable owner is reclaimed immediately only when the same-host
 PID check confirms that owner is dead. A live, paused, PID-reused, unreadable,
 or otherwise ambiguous owner is never stolen; callers receive a typed busy or
