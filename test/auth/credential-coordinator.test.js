@@ -438,14 +438,30 @@ describe('CredentialCoordinator', () => {
       const { CredentialCoordinator } = require(process.argv[1]);
       const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       let releases = 0;
+      let filler = null;
+      async function stopFiller() {
+        if (!filler || filler.exitCode !== null) return;
+        const exited = new Promise((resolve) => filler.once('exit', resolve));
+        filler.kill();
+        if (await Promise.race([exited.then(() => true), delay(500).then(() => false)])) return;
+        filler.kill('SIGKILL');
+        await exited;
+      }
+      async function finish(result) {
+        process.stdout.write(JSON.stringify(result) + '\\n');
+        process.stdin.resume();
+        await new Promise((resolve) => process.stdin.once('data', resolve));
+        await stopFiller();
+        process.stdout.write('filler-stopped\\n');
+      }
       const coordinator = new CredentialCoordinator({
         secretStore: {}, deps: { stateRoot: process.argv[2], lockHooks: {
           beforeOwnedLockRename: async () => {
             if (releases++ === 0) return;
-            const filler = spawn(process.execPath, ['-e', "const chunk = Buffer.alloc(65536, 'x'); for (;;) process.stderr.write(chunk);"], {
+            filler = spawn(process.execPath, ['-e', "const chunk = Buffer.alloc(65536, 'x'); let remaining = 128; process.stderr.on('error', () => process.exit(0)); function write() { if (remaining-- <= 0) return; if (process.stderr.write(chunk)) setImmediate(write); else process.stderr.once('drain', write); } write();"], {
               stdio: ['ignore', 'ignore', 2],
             });
-            filler.unref();
+            process.stdout.write('filler:' + filler.pid + '\\n');
             await delay(1300);
             throw new Error('simulate delayed rename failure');
           },
@@ -460,14 +476,10 @@ describe('CredentialCoordinator', () => {
         } catch (error) {
           preserved = error === original;
         }
-        process.stdout.write(JSON.stringify({ success, preserved }) + '\\n');
-        process.stdin.resume();
-        process.stdin.once('data', () => {});
+        await finish({ success, preserved });
       })().catch((error) => {
-        process.stdout.write(JSON.stringify({ unexpected: error && error.message }) + '\\n');
         process.exitCode = 1;
-        process.stdin.resume();
-        process.stdin.once('data', () => {});
+        finish({ unexpected: error && error.message }).catch(() => {});
       });
     `;
     const outcome = await new Promise((resolve, reject) => {
@@ -476,15 +488,25 @@ describe('CredentialCoordinator', () => {
       });
       let stdout = '';
       let closed = false;
+      let closeScheduled = false;
+      let fillerPid = null;
+      let closeTimer = null;
       const timeout = setTimeout(() => {
         child.kill();
+        if (closeTimer) clearTimeout(closeTimer);
+        if (fillerPid) {
+          try { process.kill(fillerPid, 'SIGKILL'); } catch {}
+        }
         reject(new Error(`timed out waiting for delayed backpressured diagnostic child: ${stdout}`));
       }, 8_000);
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk) => {
         stdout += chunk;
-        if (!closed && stdout.includes('\n')) {
-          setTimeout(() => {
+        const match = stdout.match(/filler:(\d+)/);
+        if (match) fillerPid = Number(match[1]);
+        if (!closeScheduled && stdout.split('\n').some((line) => line.startsWith('{'))) {
+          closeScheduled = true;
+          closeTimer = setTimeout(() => {
             closed = true;
             child.stderr.destroy();
             child.stdin.end('finish\n');
@@ -494,14 +516,17 @@ describe('CredentialCoordinator', () => {
       child.on('error', (error) => { clearTimeout(timeout); reject(error); });
       child.on('exit', (code) => {
         clearTimeout(timeout);
+        if (closeTimer) clearTimeout(closeTimer);
+        const resultLine = stdout.split('\n').find((line) => line.startsWith('{'));
         let result = null;
-        try { result = JSON.parse(stdout.trim()); } catch {}
+        try { result = JSON.parse(resultLine); } catch {}
         resolve({ code, result, stdout, closed });
       });
     });
     assert.equal(outcome.closed, true, JSON.stringify(outcome));
     assert.equal(outcome.code, 0, JSON.stringify(outcome));
     assert.deepEqual(outcome.result, { success: 'committed', preserved: true });
+    assert.match(outcome.stdout, /filler-stopped/);
   });
 
   it('waits for a live initializer to record its owner instead of declaring interrupted recovery', async () => {
