@@ -48,6 +48,13 @@ function makeRecoveryHarness(opts = {}) {
               return;
             }
             if (request.method === 'tools/list') {
+              if (typeof opts.respond === 'function') {
+                const custom = opts.respond(request, pages);
+                if (custom !== undefined) {
+                  if (custom !== null) this.onMessage(custom, null);
+                  return;
+                }
+              }
               const cursor = request.params && request.params.cursor;
               const page = cursor === undefined ? pages[0] : pages.find((p) => p.forCursor === cursor);
               this.onMessage(response(request.id, JSON.parse(JSON.stringify(page || { tools: [] }))), null);
@@ -76,6 +83,7 @@ function makeRecoveryHarness(opts = {}) {
     sendToClient: (line) => sent.push(JSON.parse(line)),
     log: () => {},
     recoveryTimeoutMs: opts.recoveryTimeoutMs,
+    recoveredCatalogAssemblyTimeoutMs: opts.recoveredCatalogAssemblyTimeoutMs,
   });
   router.enterDegradedMode([{ siteId: 'siteA', reason: 'unavailable' }]);
   router.handleClientMessage({
@@ -285,6 +293,19 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.ok(cachedNames.includes('media-list'));
   });
 
+  it('does not duplicate bridge-owned names supplied by a remote page', async () => {
+    const h = makeRecoveryHarness({ pages: [{ tools: [
+      { name: 'content-list', inputSchema: { type: 'object' } },
+      { name: 'wp_bridge_health', inputSchema: { type: 'object' } },
+    ] }] });
+    reconnect(h.router, 181, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const list = { jsonrpc: '2.0', id: 182, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(list, JSON.stringify(list));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(callResponse(h.sent, 182).result.tools.filter((tool) => tool.name === 'wp_bridge_health').length, 1);
+  });
+
   it('keeps recovered complete categories coherent across later pagination and load/unload notifications', async () => {
     const catalog = new ToolCatalog({ toolFilter: { enabled: true, alwaysIncludeCategories: ['content'] } });
     const h = makeRecoveryHarness({
@@ -302,12 +323,12 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(callResponse(h.sent, 31).result.tools.map((tool) => tool.name).filter((name) => !name.startsWith('wp_')), ['content-list']);
 
-    // A stale second-page request must still honour the current category
-    // filter, rather than exposing unloaded media tools or replacing cache.
+    // A stale second-page request cannot mutate or duplicate the retained
+    // complete catalog.
     const stale = { jsonrpc: '2.0', id: 311, method: 'tools/list', params: { cursor: 'page-2' } };
     h.router.handleClientMessage(stale, JSON.stringify(stale));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(callResponse(h.sent, 311).result.tools.some((tool) => tool.name === 'media-list'), false);
+    assert.equal(callResponse(h.sent, 311).error.code, -32603);
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), ['content-list', 'media-list']);
 
     h.router.handleClientMessage({ jsonrpc: '2.0', id: 32, method: 'tools/call',
@@ -343,6 +364,106 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     const unloadedAggregate = [37, 38].flatMap((id) => callResponse(h.sent, id).result.tools.map((tool) => tool.name));
     assert.equal(new Set(unloadedAggregate).size, unloadedAggregate.length);
     assert.equal(unloadedAggregate.includes('media-list'), false, 'unloaded category stays filtered on every page');
+  });
+
+  it('preserves the previous complete catalog on malformed, error, and repeated-cursor client pages', async () => {
+    const config = { pages: [
+      { tools: [{ name: 'content-list', inputSchema: { type: 'object' } }], nextCursor: 'page-2' },
+      { forCursor: 'page-2', tools: [{ name: 'media-list', inputSchema: { type: 'object' } }] },
+    ] };
+    const catalog = new ToolCatalog({ toolFilter: { enabled: true, alwaysIncludeCategories: ['content'] } });
+    config.catalog = catalog;
+    const h = makeRecoveryHarness(config);
+    reconnect(h.router, 60, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const initial = { jsonrpc: '2.0', id: 61, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(initial, JSON.stringify(initial));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const previous = catalog.fullTools.map((tool) => tool.name);
+
+    config.respond = (request) => request.method === 'tools/list'
+      ? { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'remote failure' } }
+      : undefined;
+    const errorPage = { jsonrpc: '2.0', id: 62, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(errorPage, JSON.stringify(errorPage));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(callResponse(h.sent, 62).error.code, -32603);
+    assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
+
+    config.respond = (request) => request.method === 'tools/list'
+      ? { jsonrpc: '2.0', id: request.id, result: { malformed: true } }
+      : undefined;
+    const malformed = { jsonrpc: '2.0', id: 63, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(malformed, JSON.stringify(malformed));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(callResponse(h.sent, 63).error.code, -32603);
+    assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
+
+    config.respond = (request) => {
+      if (request.method !== 'tools/list') return undefined;
+      return response(request.id, { tools: [{ name: request.params && request.params.cursor ? 'content-next' : 'content-root' }], nextCursor: 'loop' });
+    };
+    const root = { jsonrpc: '2.0', id: 64, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(root, JSON.stringify(root));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const loop = { jsonrpc: '2.0', id: 65, method: 'tools/list', params: { cursor: 'loop' } };
+    h.router.handleClientMessage(loop, JSON.stringify(loop));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(callResponse(h.sent, 65).error.code, -32603);
+    assert.deepEqual(catalog.fullTools.map((tool) => tool.name), previous);
+  });
+
+  it('expires a client-owned catalog assembly without allowing its late page to satisfy a reused id', async () => {
+    const config = {
+      recoveredCatalogAssemblyTimeoutMs: 50,
+    };
+    const h = makeRecoveryHarness(config);
+    reconnect(h.router, 70, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    config.respond = (request) => {
+      if (request.method !== 'tools/list') return undefined;
+      if (!request.params || request.params.cursor === undefined) return response(request.id, { tools: [{ name: 'content-root' }], nextCursor: 'late' });
+      return null;
+    };
+    const recoveryRefresh = { jsonrpc: '2.0', id: 710, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(recoveryRefresh, JSON.stringify(recoveryRefresh));
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const first = { jsonrpc: '2.0', id: 71, method: 'tools/list', params: {} };
+    h.router.handleClientMessage(first, JSON.stringify(first));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const pending = { jsonrpc: '2.0', id: 72, method: 'tools/list', params: { cursor: 'late' } };
+    h.router.handleClientMessage(pending, JSON.stringify(pending));
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    assert.equal(callResponse(h.sent, 72).error.code, -32603);
+    h.router.handleClientMessage(pending, JSON.stringify(pending));
+    assert.equal(h.requests.filter((entry) => entry.request.id === 72).length, 1, 'id reuse remains blocked until late transport settlement');
+    h.transport.onMessage(response(72, { tools: [{ name: 'late-tool' }] }), null);
+    assert.equal(h.sent.filter((message) => message.id === 72).length, 2, 'late response is suppressed after the timeout error');
+  });
+
+  it('bounds unique endless pages and oversized catalogs before replacing the retained cache', async () => {
+    const h = makeRecoveryHarness();
+    reconnect(h.router, 73, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const retained = h.catalog[h.catalog.length - 1];
+    const assembly = h.router._startRecoveredCatalogAssembly();
+    for (let page = 0; page < 100; page += 1) {
+      h.router._appendRecoveredCatalogPage(assembly, {
+        tools: [{ name: `content-${page}` }], nextCursor: `cursor-${page}`,
+      });
+    }
+    assert.throws(() => h.router._appendRecoveredCatalogPage(assembly, {
+      tools: [{ name: 'content-overflow' }], nextCursor: 'cursor-overflow',
+    }));
+    h.router._failRecoveredCatalogAssembly(assembly);
+    assert.equal(h.catalog[h.catalog.length - 1], retained, 'page-limit failure retains the previous catalog');
+
+    const oversized = h.router._startRecoveredCatalogAssembly();
+    assert.throws(() => h.router._appendRecoveredCatalogPage(oversized, {
+      tools: Array.from({ length: 5001 }, (_unused, index) => ({ name: `media-${index}` })),
+    }));
+    h.router._failRecoveredCatalogAssembly(oversized);
+    assert.equal(h.catalog[h.catalog.length - 1], retained, 'tool-limit failure retains the previous catalog');
   });
 
   it('forwards a former private id only after a real client request, then drops an unsolicited duplicate', async () => {
