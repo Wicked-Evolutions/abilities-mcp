@@ -78,6 +78,12 @@ describe('ToolCatalog', () => {
     assert.ok(!names.includes('fluent-crm-list-contacts'));
   });
 
+  it('filterTools admits newly received tools in an enabled category without requiring a prior cache write', () => {
+    const catalog = makeCatalog({ alwaysIncludeCategories: ['content'] });
+    catalog.cacheTools([{ name: 'content-list' }]);
+    assert.deepEqual(catalog.filterTools([{ name: 'content-new' }, { name: 'media-new' }]).map((tool) => tool.name), ['content-new']);
+  });
+
   it('activateCategories loads additional tools', () => {
     const catalog = makeCatalog();
     catalog.cacheTools(SAMPLE_TOOLS);
