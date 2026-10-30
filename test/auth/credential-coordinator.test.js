@@ -494,6 +494,7 @@ describe('CredentialCoordinator', () => {
       let fillerStopped = false;
       let timeoutError = null;
       let childError = null;
+      let mainExited = false;
       const stopOwnedFiller = () => {
         if (!fillerPid || fillerStopped) return;
         try { process.kill(fillerPid, 'SIGKILL'); } catch {}
@@ -515,6 +516,10 @@ describe('CredentialCoordinator', () => {
         const match = stdout.match(/filler:(\d+)/);
         if (match) fillerPid = Number(match[1]);
         if (stdout.includes('filler-stopped\n')) fillerStopped = true;
+        if (mainExited && !fillerStopped) {
+          stopOwnedFiller();
+          stopOwnedPipes();
+        }
         if (!closeScheduled && stdout.split('\n').some((line) => line.startsWith('{'))) {
           closeScheduled = true;
           closeTimer = setTimeout(() => {
@@ -532,6 +537,7 @@ describe('CredentialCoordinator', () => {
         child.kill();
       });
       child.on('exit', () => {
+        mainExited = true;
         if (!fillerStopped) {
           stopOwnedFiller();
           stopOwnedPipes();
@@ -569,6 +575,7 @@ describe('CredentialCoordinator', () => {
       const child = spawn(process.execPath, ['-e', source], { stdio: ['ignore', 'pipe', 'pipe'] });
       let fillerPid = null;
       let timedOut = false;
+      let mainExited = false;
       const stopOwnedFiller = () => {
         if (!fillerPid) return;
         try { process.kill(fillerPid, 'SIGKILL'); } catch {}
@@ -583,9 +590,11 @@ describe('CredentialCoordinator', () => {
       child.stdout.on('data', (chunk) => {
         const match = String(chunk).match(/filler:(\d+)/);
         if (match) fillerPid = Number(match[1]);
+        if (mainExited) stopOwnedFiller();
       });
       child.on('error', (error) => { clearTimeout(timeout); reject(error); });
       child.on('exit', () => {
+        mainExited = true;
         stopOwnedFiller();
         child.stderr.destroy();
       });
