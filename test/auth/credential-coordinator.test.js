@@ -430,7 +430,85 @@ describe('CredentialCoordinator', () => {
     assert.deepEqual(outcome.result, { success: 'committed', preserved: true });
   });
 
-  it('keeps a delayed backpressured stderr diagnostic nonfatal', async () => {
+  it('contains delayed direct-fd diagnostic callbacks on every platform', async () => {
+    const root = makeRoot();
+    const coordinatorPath = path.resolve(__dirname, '../../lib/auth/credential-coordinator.js');
+    const source = `
+      const fs = require('node:fs');
+      const { CredentialCoordinator } = require(process.argv[1]);
+      const diagnostic = '[abilities-mcp] credential_lock_release_rename_failed\\n';
+      const originalWrite = fs.write;
+      const callbacks = [];
+      let settled = false;
+      let callbacksBeforeSettlement = 0;
+      fs.write = function(fd, data, callback) {
+        if (fd === 2 && data === diagnostic && typeof callback === 'function') {
+          callbacks.push(() => {
+            if (!settled) callbacksBeforeSettlement += 1;
+            callback(Object.assign(new Error('simulated delayed EPIPE'), { code: 'EPIPE' }));
+          });
+          return true;
+        }
+        return originalWrite.apply(this, arguments);
+      };
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      (async () => {
+        const coordinator = new CredentialCoordinator({
+          secretStore: {}, deps: { stateRoot: process.argv[2], lockHooks: {
+            beforeOwnedLockRename: async () => { throw new Error('simulate rename failure'); },
+          } },
+        });
+        const success = await coordinator.withCredentialLock('fd-delayed-success', 'refresh', async () => 'committed');
+        const original = new Error('original callback failure');
+        let preserved = false;
+        try {
+          await coordinator.withCredentialLock('fd-delayed-error', 'refresh', async () => { throw original; });
+        } catch (error) {
+          preserved = error === original;
+        }
+        settled = true;
+        await delay(1100);
+        for (const callback of callbacks) callback();
+        await delay(20);
+        process.stdout.write(JSON.stringify({ success, preserved, writes: callbacks.length, callbacksBeforeSettlement }) + '\\n');
+      })().catch((error) => {
+        process.stdout.write(JSON.stringify({ unexpected: error && error.message }) + '\\n');
+        process.exitCode = 1;
+      });
+    `;
+    const outcome = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', source, coordinatorPath, root], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      let stdout = '';
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error(`timed out waiting for delayed direct-fd callback child: ${stdout}`));
+      }, 4_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.on('error', (error) => { clearTimeout(timeout); reject(error); });
+      child.on('exit', (code) => {
+        clearTimeout(timeout);
+        let result = null;
+        try { result = JSON.parse(stdout.trim()); } catch {}
+        resolve({ code, result, stdout });
+      });
+    });
+    assert.equal(outcome.code, 0, JSON.stringify(outcome));
+    assert.deepEqual(outcome.result, {
+      success: 'committed',
+      preserved: true,
+      writes: 2,
+      callbacksBeforeSettlement: 0,
+    });
+  });
+
+  it('keeps a delayed backpressured stderr diagnostic nonfatal on POSIX pipes', async (t) => {
+    if (process.platform === 'win32') {
+      t.skip('Node process stderr pipes are synchronous on Windows; this physical async-backpressure check is POSIX-only.');
+      return;
+    }
     const root = makeRoot();
     const coordinatorPath = path.resolve(__dirname, '../../lib/auth/credential-coordinator.js');
     const source = `
@@ -565,9 +643,7 @@ describe('CredentialCoordinator', () => {
   it('cleans the owned delayed-pipe helper after an early main-child exit', async () => {
     const source = `
       const { spawn } = require('node:child_process');
-      const filler = spawn(process.execPath, ['-e', "const chunk = Buffer.alloc(65536, 'x'); let remaining = 128; process.stderr.on('error', () => process.exit(0)); function write() { if (remaining-- <= 0) return; if (process.stderr.write(chunk)) setImmediate(write); else process.stderr.once('drain', write); } write();"], {
-        stdio: ['ignore', 'ignore', 2],
-      });
+      const filler = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
       process.stdout.write('filler:' + filler.pid + '\\n');
       setTimeout(() => process.exit(0), 25);
     `;
