@@ -28,6 +28,62 @@ function appPasswordSite(id) {
   };
 }
 
+function configLockLifecycle(configPath) {
+  const coordinationDir = path.join(path.dirname(configPath), '.abilities-mcp-coordination');
+  let entries;
+  try {
+    entries = fs.readdirSync(coordinationDir, { withFileTypes: true });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return { coordinationDirectory: false, configLocks: 0, ownerFiles: 0, reclaimMarkers: 0 };
+    }
+    return {
+      coordinationDirectory: null,
+      configLocks: null,
+      ownerFiles: null,
+      reclaimMarkers: null,
+      readErrorCode: error && error.code || null,
+    };
+  }
+
+  const locks = entries.filter((entry) => entry.isDirectory() && entry.name.endsWith('.config.lock'));
+  let ownerFiles = 0;
+  let reclaimMarkers = 0;
+  for (const lock of locks) {
+    try {
+      for (const child of fs.readdirSync(path.join(coordinationDir, lock.name), { withFileTypes: true })) {
+        if (child.isFile() && child.name === 'owner.json') ownerFiles += 1;
+        if (child.isDirectory() && child.name.startsWith('reclaim.')) reclaimMarkers += 1;
+      }
+    } catch (error) {
+      if (!error || error.code !== 'ENOENT') {
+        return {
+          coordinationDirectory: true,
+          configLocks: locks.length,
+          ownerFiles,
+          reclaimMarkers,
+          readErrorCode: error && error.code || null,
+        };
+      }
+    }
+  }
+  return { coordinationDirectory: true, configLocks: locks.length, ownerFiles, reclaimMarkers };
+}
+
+function seedDiagnostic(result, configPath) {
+  const error = result && result.error;
+  const cause = error && error.cause;
+  return {
+    reason: result && result.reason || null,
+    error: error ? {
+      name: error.name || null,
+      code: error.code || null,
+      cause: cause ? { name: cause.name || null, code: cause.code || null } : null,
+    } : null,
+    lockLifecycle: configLockLifecycle(configPath),
+  };
+}
+
 function runWriter(configPath, siteId, delayMs) {
   const configStore = path.resolve(__dirname, '../../lib/cli/config-store.js');
   const source = `
@@ -94,7 +150,17 @@ describe('CLI config commit writers', () => {
     const written = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.deepEqual(Object.keys(written.sites), ['manual']);
     assert.equal(result.seeded, false);
-    assert.equal(result.reason, 'exists');
+    assert.equal(
+      result.reason,
+      'exists',
+      `concurrent seed diagnostic: ${JSON.stringify(seedDiagnostic(result, configPath))}`
+    );
+    assert.deepEqual(configLockLifecycle(configPath), {
+      coordinationDirectory: true,
+      configLocks: 0,
+      ownerFiles: 0,
+      reclaimMarkers: 0,
+    });
     assert.equal(await store.get('abilities-mcp', 'seed/apppassword'), null);
   });
 });
