@@ -58,6 +58,7 @@ function makeRecoveryHarness(opts = {}) {
       return transport;
     },
     promoteStagedTransport(site, staged) { promoted.push({ site, staged }); },
+    async getTransport() { return transport; },
   };
   const catalog = opts.catalog || {
     isEnabled: () => true,
@@ -321,6 +322,11 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     h.router.handleClientMessage(pageTwo, JSON.stringify(pageTwo));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(catalog.fullTools.map((tool) => tool.name), ['content-list', 'media-list']);
+    const aggregate = [33, 34].flatMap((id) => callResponse(h.sent, id).result.tools.map((tool) => tool.name));
+    assert.equal(new Set(aggregate).size, aggregate.length, 'each remote and bridge tool appears once across client pages');
+    for (const name of ['content-list', 'media-list', 'wp_bridge_health', 'wp_bridge_reconnect', 'wp_browse_tools', 'wp_load_tools']) {
+      assert.ok(aggregate.includes(name), `aggregate includes ${name}`);
+    }
 
     h.router.handleClientMessage({ jsonrpc: '2.0', id: 35, method: 'tools/call',
       params: { name: 'wp_browse_tools', arguments: {} } }, '{}');
@@ -331,6 +337,12 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     h.router.handleClientMessage(afterUnload, JSON.stringify(afterUnload));
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.deepEqual(callResponse(h.sent, 37).result.tools.map((tool) => tool.name).filter((name) => !name.startsWith('wp_')), ['content-list']);
+    const afterUnloadPageTwo = { jsonrpc: '2.0', id: 38, method: 'tools/list', params: { cursor: 'page-2' } };
+    h.router.handleClientMessage(afterUnloadPageTwo, JSON.stringify(afterUnloadPageTwo));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const unloadedAggregate = [37, 38].flatMap((id) => callResponse(h.sent, id).result.tools.map((tool) => tool.name));
+    assert.equal(new Set(unloadedAggregate).size, unloadedAggregate.length);
+    assert.equal(unloadedAggregate.includes('media-list'), false, 'unloaded category stays filtered on every page');
   });
 
   it('forwards a former private id only after a real client request, then drops an unsolicited duplicate', async () => {
@@ -344,6 +356,17 @@ describe('McpRouter — explicit degraded reconnect (#125)', () => {
     assert.equal(callResponse(h.sent, privateId).result.content[0].text, 'ordinary collision');
     h.transport.onMessage(response(privateId, { content: [{ type: 'text', text: 'late duplicate' }] }), null);
     assert.equal(h.sent.filter((message) => message.id === privateId).length, 1);
+
+    const aliasRequest = {
+      jsonrpc: '2.0', id: privateId, method: 'tools/call',
+      params: { name: 'content-list', arguments: { site: 'siteB' } },
+    };
+    h.router.handleClientMessage(aliasRequest, JSON.stringify(aliasRequest));
+    await tick();
+    h.transport.onMessage(response(privateId, { content: [{ type: 'text', text: 'alias collision' }] }), null);
+    assert.equal(h.sent.filter((message) => message.id === privateId).length, 2);
+    h.transport.onMessage(response(privateId, { content: [{ type: 'text', text: 'alias duplicate' }] }), null);
+    assert.equal(h.sent.filter((message) => message.id === privateId).length, 2);
   });
 
   it('cancels a staged attempt during shutdown and never allows a late promotion', async () => {
