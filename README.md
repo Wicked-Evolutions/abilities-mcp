@@ -16,7 +16,7 @@ Our development aim is the *Official WordPress Compatibility Contract* — see [
 
 ---
 
-Open-source MCP bridge that connects any AI client to your WordPress sites through the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/). Pair it with Mycelium for WordPress for the current site setup. One STDIO server supports multi-site routing and OAuth 2.1 or Application Password authentication with zero runtime npm dependencies.
+Open-source MCP bridge that connects any AI client to your WordPress sites through the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/). Pair it with Mycelium for WordPress for the current site setup. One STDIO server supports multi-site routing and OAuth 2.1 or Application Password authentication. The core bridge uses Node.js built-ins; optional keytar provides a native credential-store backend.
 
 ## Features
 
@@ -27,7 +27,7 @@ Open-source MCP bridge that connects any AI client to your WordPress sites throu
 - **Lazy connections** — Sites connect on first use, not at startup
 - **WordPress multisite** — Subdomain-style multisite with cross-site routing through the dot-suffix model
 - **Auto-reconnect** — Exponential backoff, healthcheck pings, session recovery
-- **Zero npm dependencies** — Node.js built-in modules only
+- **Core bridge** — uses Node.js built-ins; optional keytar provides a native credential-store backend
 
 ## What You Can Do
 
