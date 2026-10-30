@@ -259,6 +259,9 @@ if (!isSubcommandInvocation) {
 
     function shutdown() {
       log('Shutting down');
+      // Issue #125: fence any private staged reconnect before the shared pool
+      // is torn down. This never changes normal healthy shutdown behavior.
+      router.beginShutdown();
       pool.shutdownAll().then(() => {
         process.exit(0);
       }).catch(() => {

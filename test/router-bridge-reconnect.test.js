@@ -1,0 +1,205 @@
+'use strict';
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const { McpRouter } = require('../lib/router');
+
+function tick() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function response(id, result) {
+  return { jsonrpc: '2.0', id, result };
+}
+
+function makeRecoveryHarness(opts = {}) {
+  const sent = [];
+  const requests = [];
+  const created = [];
+  const promoted = [];
+  const catalog = [];
+  const pages = opts.pages || [
+    { tools: [{ name: 'content-list', inputSchema: { type: 'object' } }] },
+  ];
+  let transport;
+
+  const pool = {
+    setHandshakeCache() {},
+    async createStagedTransport(site) {
+      created.push(site);
+      transport = {
+        onMessage: null,
+        shutdownCalls: 0,
+        async connect() {},
+        async shutdown() { this.shutdownCalls += 1; },
+        send(line) {
+          const request = JSON.parse(line);
+          requests.push({ site, request });
+          if (opts.hang) return;
+          const delay = opts.delayMs || 0;
+          setTimeout(() => {
+            if (!this.onMessage) return;
+            if (request.method === 'initialize') {
+              this.onMessage(response(request.id, opts.initializeResult || {
+                protocolVersion: '2025-06-18', capabilities: { tools: {} },
+              }), null);
+              return;
+            }
+            if (request.method === 'tools/list') {
+              const cursor = request.params && request.params.cursor;
+              const page = cursor === undefined ? pages[0] : pages.find((p) => p.forCursor === cursor);
+              this.onMessage(response(request.id, page || { tools: [] }), null);
+            }
+          }, delay);
+        },
+      };
+      return transport;
+    },
+    promoteStagedTransport(site, staged) { promoted.push({ site, staged }); },
+  };
+  const router = new McpRouter({
+    config: { defaultSite: 'siteA', sites: { siteA: {}, siteB: {} } },
+    siteKeys: ['siteA', 'siteB'],
+    isMultiSite: true,
+    pool,
+    catalog: {
+      isEnabled: () => true,
+      cacheTools: (tools) => catalog.push(tools),
+      getFilteredTools: () => [],
+    },
+    sendToClient: (line) => sent.push(JSON.parse(line)),
+    log: () => {},
+    recoveryTimeoutMs: opts.recoveryTimeoutMs,
+  });
+  router.enterDegradedMode([{ siteId: 'siteA', reason: 'unavailable' }]);
+  router.handleClientMessage({
+    jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {} },
+  }, '{}');
+  router.handleClientMessage({ jsonrpc: '2.0', method: 'initialized', params: {} }, '{}');
+
+  return { router, sent, requests, created, promoted, catalog, get transport() { return transport; } };
+}
+
+function reconnect(router, id, site = 'siteA') {
+  router.handleClientMessage({
+    jsonrpc: '2.0', id, method: 'tools/call',
+    params: { name: 'wp_bridge_reconnect', arguments: { site } },
+  }, '{}');
+}
+
+function callResponse(sent, id) {
+  return sent.find((message) => message.id === id);
+}
+
+describe('McpRouter — explicit degraded reconnect (#125)', () => {
+  it('recovers only the selected site after private initialize and a complete paginated catalog', async () => {
+    const h = makeRecoveryHarness({ pages: [
+      { tools: [{ name: 'content-list', inputSchema: { type: 'object' } }], nextCursor: 'page-2' },
+      { forCursor: 'page-2', tools: [{ name: 'media-list', inputSchema: { type: 'object' } }] },
+    ] });
+
+    reconnect(h.router, 10, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(h.created.length, 1);
+    assert.deepEqual(h.created, ['siteA']);
+    assert.equal(h.promoted.length, 1);
+    assert.equal(h.router.degraded, false);
+    assert.equal(h.router.defaultTransport, h.transport);
+    assert.deepEqual(h.catalog[0].map((tool) => tool.name), ['content-list', 'media-list']);
+    assert.equal(h.requests.filter((entry) => entry.request.method === 'initialize').length, 1);
+    assert.equal(h.requests.filter((entry) => entry.request.method === 'tools/list').length, 2);
+    assert.equal(h.requests.every((entry) => entry.site === 'siteA'), true, 'never contacts another configured site');
+    assert.equal(callResponse(h.sent, 10).result.isError, undefined);
+    assert.equal(h.sent.filter((message) => message.method === 'notifications/tools/list_changed').length, 1);
+    assert.equal(h.sent.some((message) => message.id >= 1000000000), false, 'private responses never reach client');
+  });
+
+  it('rejects unknown targets before any transport or credential work', async () => {
+    const h = makeRecoveryHarness();
+    reconnect(h.router, 11, 'https://untrusted.example');
+    await tick();
+    assert.equal(h.created.length, 0);
+    assert.equal(callResponse(h.sent, 11).result.isError, true);
+  });
+
+  it('coalesces same-target callers, rejects a conflict, and notifies once', async () => {
+    const h = makeRecoveryHarness({ delayMs: 10 });
+    reconnect(h.router, 12, 'siteA');
+    reconnect(h.router, 13, 'siteA');
+    reconnect(h.router, 14, 'siteB');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(h.created.length, 1);
+    assert.equal(h.requests.filter((entry) => entry.request.method === 'initialize').length, 1);
+    assert.equal(callResponse(h.sent, 12).result.isError, undefined);
+    assert.equal(callResponse(h.sent, 13).result.isError, undefined);
+    assert.equal(callResponse(h.sent, 14).result.isError, true);
+    assert.equal(h.sent.filter((message) => message.method === 'notifications/tools/list_changed').length, 1);
+  });
+
+  it('times out without promotion and fences a late private response', async () => {
+    const h = makeRecoveryHarness({ hang: true, recoveryTimeoutMs: 15 });
+    reconnect(h.router, 15, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(callResponse(h.sent, 15).result.isError, true);
+    assert.equal(h.promoted.length, 0);
+    assert.equal(h.router.degraded, true);
+
+    h.router.handleTransportMessage(response(1000000001, {
+      protocolVersion: '2025-06-18', capabilities: { tools: {} },
+    }), null);
+    assert.equal(h.sent.some((message) => message.id === 1000000001), false);
+  });
+
+  it('keeps a timed-out attempt busy until staged cleanup and credential work actually settle', async () => {
+    const h = makeRecoveryHarness({ hang: true, recoveryTimeoutMs: 15 });
+    reconnect(h.router, 151, 'siteA');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    let releaseCleanup;
+    const cleanupGate = new Promise((resolve) => { releaseCleanup = resolve; });
+    h.transport.shutdown = async () => cleanupGate;
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(callResponse(h.sent, 151).result.isError, true, 'caller sees the shared deadline');
+    reconnect(h.router, 152, 'siteA');
+    reconnect(h.router, 153, 'siteB');
+    await tick();
+    assert.equal(h.created.length, 1, 'same target cannot create a second attempt while cleanup is pending');
+    assert.equal(callResponse(h.sent, 153).result.isError, true, 'conflicting target is rejected while busy');
+
+    releaseCleanup();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(h.router._recoveryAttempt, null, 'attempt retires only after real cleanup settlement');
+  });
+
+  it('does not promote invalid initialize, malformed catalog, or repeated pagination', async () => {
+    for (const opts of [
+      { initializeResult: { protocolVersion: 'wrong', capabilities: { tools: {} } } },
+      { pages: [{ tools: [{ inputSchema: { type: 'object' } }] }] },
+      { pages: [
+        { tools: [{ name: 'first', inputSchema: { type: 'object' } }], nextCursor: 'again' },
+        { forCursor: 'again', tools: [{ name: 'second', inputSchema: { type: 'object' } }], nextCursor: 'again' },
+      ] },
+    ]) {
+      const h = makeRecoveryHarness(opts);
+      reconnect(h.router, 16, 'siteA');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(h.promoted.length, 0);
+      assert.equal(h.router.degraded, true);
+      assert.equal(callResponse(h.sent, 16).result.isError, true);
+    }
+  });
+
+  it('cancels a staged attempt during shutdown and never allows a late promotion', async () => {
+    const h = makeRecoveryHarness({ hang: true, recoveryTimeoutMs: 100 });
+    reconnect(h.router, 17, 'siteA');
+    await tick();
+    h.router.beginShutdown();
+    await tick();
+    assert.equal(callResponse(h.sent, 17).result.isError, true);
+    assert.equal(h.promoted.length, 0);
+    assert.equal(h.router.degraded, true);
+  });
+});

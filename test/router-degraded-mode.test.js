@@ -20,9 +20,9 @@ const { McpRouter } = require('../lib/router');
  * router then:
  *   - synthesizes a valid InitializeResult on `initialize` (echoing the
  *     client's protocolVersion; serverInfo with the bridge package version)
- *   - returns the bridge's three local tools on tools/list
+ *   - returns the bridge's four local tools on tools/list
  *   - surfaces a per-call error on non-bridge tools/call naming degraded sites
- *   - bridge tools/call (wp_bridge_health, wp_browse_tools, wp_load_tools)
+ *   - bridge tools/call (wp_bridge_health, wp_bridge_reconnect, wp_browse_tools, wp_load_tools)
  *     still work locally — they don't need a backing transport
  *
  * Tests drive the router with a captured-sendToClient callback so the exact
@@ -82,6 +82,8 @@ describe('McpRouter — degraded mode (#76)', () => {
       'serverInfo present');
     assert.equal(typeof resp.result.serverInfo.name, 'string');
     assert.equal(typeof resp.result.serverInfo.version, 'string');
+    assert.equal(resp.result.capabilities.tools.listChanged, true,
+      'degraded initialize advertises the later recovery catalog notification');
   });
 
   it('synthesized InitializeResult defaults protocolVersion when client omits it', () => {
@@ -96,7 +98,7 @@ describe('McpRouter — degraded mode (#76)', () => {
     assert.ok(resp.result.protocolVersion.length > 0);
   });
 
-  it('tools/list returns the three bridge tools only', () => {
+  it('tools/list returns the four bridge tools only', () => {
     const { router, sent } = makeRouter();
     router.handleClientMessage({
       jsonrpc: '2.0', id: 2, method: 'tools/list',
@@ -106,7 +108,7 @@ describe('McpRouter — degraded mode (#76)', () => {
     assert.ok(resp.result, 'tools/list returns result, not error');
     assert.ok(Array.isArray(resp.result.tools));
     const names = resp.result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['wp_bridge_health', 'wp_browse_tools', 'wp_load_tools'],
+    assert.deepEqual(names, ['wp_bridge_health', 'wp_bridge_reconnect', 'wp_browse_tools', 'wp_load_tools'],
       'degraded-mode tools/list = bridge tools only (no WordPress-side tools)');
   });
 
@@ -488,7 +490,7 @@ describe('McpRouter — drainEarlyQueue in degraded boot (#102a)', () => {
     assert.ok(resp.result, 'tools/list returns result, not error');
     assert.ok(Array.isArray(resp.result.tools), 'result.tools is an array');
     const names = resp.result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ['wp_bridge_health', 'wp_browse_tools', 'wp_load_tools'],
+    assert.deepEqual(names, ['wp_bridge_health', 'wp_bridge_reconnect', 'wp_browse_tools', 'wp_load_tools'],
       'degraded drain tools/list = bridge tools only');
   });
 

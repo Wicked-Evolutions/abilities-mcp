@@ -11,6 +11,49 @@ const { TokenManager, SECRET_SERVICE } = require('../lib/auth/token-manager');
 const { MemorySecretStore } = require('../lib/auth/memory-secret-store');
 const { makeRef } = require('../lib/auth/secret-store');
 
+describe('ConnectionPool staged recovery transport (#125)', () => {
+  it('creates a selected configured transport without registering or replaying it', async () => {
+    const config = {
+      defaultSite: 'siteA',
+      sites: { siteA: { auth: { method: 'oauth' } } },
+    };
+    const pool = new ConnectionPool(config, () => {});
+    const staged = {
+      onMessage: () => { throw new Error('must be replaced before recovery sends'); },
+      connected: 0,
+      async connect() { this.connected += 1; },
+    };
+    pool._createTransport = async () => staged;
+
+    const result = await pool.createStagedTransport('siteA');
+
+    assert.equal(result, staged);
+    assert.equal(staged.connected, 1);
+    assert.equal(staged.onMessage, null);
+    assert.equal(pool.transports.size, 0, 'staged recovery cannot change active routing');
+    assert.equal(pool.connecting.size, 0, 'staged recovery does not join lazy connection state');
+  });
+
+  it('rejects an unconfigured recovery target before transport creation', async () => {
+    const pool = new ConnectionPool({ defaultSite: 'siteA', sites: { siteA: { auth: { method: 'oauth' } } } }, () => {});
+    let created = false;
+    pool._createTransport = async () => { created = true; };
+    await assert.rejects(() => pool.createStagedTransport('other'), { code: 'unknown_site' });
+    assert.equal(created, false);
+  });
+
+  it('rejects non-OAuth legacy transports before construction so recovery cleanup stays bounded', async () => {
+    const pool = new ConnectionPool({
+      defaultSite: 'siteA',
+      sites: { siteA: { transport: 'ssh', ssh: { host: 'example.test', path: '/tmp/mcp' } } },
+    }, () => {});
+    let created = false;
+    pool._createTransport = async () => { created = true; };
+    await assert.rejects(() => pool.createStagedTransport('siteA'), { code: 'unsupported_recovery_transport' });
+    assert.equal(created, false);
+  });
+});
+
 /**
  * ConnectionPool dispatch — Issue #17 acceptance criteria.
  *
