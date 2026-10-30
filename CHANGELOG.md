@@ -4,6 +4,46 @@ All notable changes to Abilities MCP are documented here.
 
 ## [Unreleased]
 
+## [1.7.0] — Proposed / unpublished
+
+This is a release-preparation identity only. It is not a tag, published
+package, GitHub release, installable artifact, or founder publication decision.
+
+### Intended release scope and prerequisites
+
+- The published `v1.6.6` tag predates the OAuth coordination source already
+  merged in [#121](https://github.com/Wicked-Evolutions/abilities-mcp/pull/121).
+  Version `1.7.0` is proposed so a final artifact can be identified separately
+  from that older release; this metadata change alone does not add runtime
+  behavior.
+- The final combined source must include and independently verify the intended
+  OAuth/recovery work in [#123](https://github.com/Wicked-Evolutions/abilities-mcp/pull/123)
+  and [#126](https://github.com/Wicked-Evolutions/abilities-mcp/issues/126),
+  plus the Windows diagnostic/callback work in
+  [#128](https://github.com/Wicked-Evolutions/abilities-mcp/issues/128) and
+  [#129](https://github.com/Wicked-Evolutions/abilities-mcp/issues/129).
+- Reproducible MCPB packaging remains a prerequisite through pending packaging
+  PR [#130](https://github.com/Wicked-Evolutions/abilities-mcp/pull/130): the
+  final candidate must use the reviewed pinned local build toolchain and record
+  its exact artifact checksum, manifest validation, package contents and
+  keytar-isolation evidence.
+
+### Verified boundary and open release blockers
+
+- The current main-source baseline includes OAuth coordination from #121. Its
+  version fields previously still said `1.6.6`; this proposal makes the future
+  successor identifiable without claiming that draft prerequisite work is
+  shipped.
+- [#127](https://github.com/Wicked-Evolutions/abilities-mcp/issues/127) remains
+  open: the Windows concurrent config-write failure's cause is not yet known,
+  so Windows is not release-ready merely because diagnostics exist.
+- Same-process desktop recovery after a degraded bridge remains pending. The
+  parent chat's original catalog failure cause is unproven; direct transport or
+  fresh-context success does not establish recovery of that existing process.
+- A final build still requires the supported Node matrix, combined-source test
+  evidence, clean package evidence, and explicit founder authority for merge,
+  tag, installation, release and publication.
+
 ## [1.6.6] - 2026-06-14
 
 Attach reliability. Two bugs that prevented an AI client from attaching to the bridge, plus the route-source hardening that surfaced alongside them.
