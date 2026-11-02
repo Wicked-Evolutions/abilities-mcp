@@ -425,6 +425,18 @@ site. Recovery currently supports OAuth-configured sites only; legacy carrier
 types are rejected before a connection is attempted. Reauthorize only when the
 site reports an authorization failure.
 
+The AI client must refresh its own tool catalog after that announcement. If the
+site was unavailable when the client started, reconnect may restore
+communication without restoring the tools in that current chat. In the tested
+case, the bridge reconnected and reported the site healthy, but the affected
+Codex chat still exposed only its four local bridge tools. A fresh ordinary
+online connection loaded the full remote catalog successfully. Start the site
+before opening the client where possible. Once it is reachable, start a fresh
+MCP connection when the client supports that, or restart the client if that is
+how it creates a new connection. Reauthorization is not the remedy for this
+connectivity problem. This client-catalog boundary remains tracked in
+[#125](https://github.com/Wicked-Evolutions/abilities-mcp/issues/125).
+
 ## Usage
 
 ### Multi-site mode

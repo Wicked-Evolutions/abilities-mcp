@@ -6,27 +6,42 @@ All notable changes to Abilities MCP are documented here.
 
 ## [1.7.0] — Proposed / unpublished
 
-### Planned
+### Included in this release candidate
 
-- **Coordinated OAuth renewal** so concurrent bridge activity shares one
+- **Coordinated OAuth renewal** so concurrent bridge activity shares one durable
   credential operation instead of competing refreshes.
-- **Narrowly safe pre-expiry fallback** when a proactive renewal is positively
-  proven unsent and the existing access token remains valid
+- **Narrowly safe pre-expiry fallback** only when a proactive renewal is
+  positively proven unsent and the existing access token remains valid
   ([#123](https://github.com/Wicked-Evolutions/abilities-mcp/pull/123)).
-- **Explicit reconnect for a degraded bridge** without repeating authorization
+- **Explicit reconnect for a completed degraded OAuth bridge** without repeating
+  authorization. It validates the remote catalog before installing it
   ([#126](https://github.com/Wicked-Evolutions/abilities-mcp/issues/126)).
 - **Operating-system-assigned OAuth callback ports** for safer cross-platform
   callback startup ([#129](https://github.com/Wicked-Evolutions/abilities-mcp/issues/129)).
 - **Repeatable locked MCPB packages** using a local pinned build toolchain and
   validated ZIP timestamp normalization ([#130](https://github.com/Wicked-Evolutions/abilities-mcp/pull/130)).
+- **Safer credential persistence** through owned lock cleanup and a bounded
+  migration retry that leaves a valid existing configuration unchanged.
+- **Bounded CI runs and portable diagnostics** for concurrent bridge tests.
+
+### Verification
+
+- Native CI passed on Node 18, 20, and 22: Ubuntu had 599 passing tests per
+  version; Windows had 596 passing tests and three explicit platform skips per
+  version (POSIX pipe backpressure, directory fsync fault injection, and
+  graceful JavaScript `SIGTERM`).
 
 ### Known limitations
 
-- The Windows concurrent config-seeding failure remains under investigation in
-  [#127](https://github.com/Wicked-Evolutions/abilities-mcp/issues/127); its
-  cause is not yet known.
-- Final release acceptance remains pending combined-source verification,
-  supported-platform checks, package evidence, and staging validation.
+- If a site was unavailable when the client started, reconnect may restore
+  communication without restoring the tools in that current chat. In one Codex
+  recovery case, the bridge reconnected but the chat kept only its four local
+  tools; a fresh ordinary online connection loaded the full catalog. Start a
+  fresh MCP connection or restart the client after the site is reachable;
+  reauthorization is not the remedy. The boundary is tracked in
+  [#125](https://github.com/Wicked-Evolutions/abilities-mcp/issues/125).
+- This is a proposed, unpublished candidate. Merge, tag, and release
+  publication remain founder decisions.
 
 ## [1.6.6] - 2026-06-14
 
