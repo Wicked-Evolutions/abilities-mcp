@@ -16,7 +16,7 @@ Our development aim is the *Official WordPress Compatibility Contract* — see [
 
 ---
 
-Open-source MCP bridge that connects any AI client to your WordPress sites through the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/). Single STDIO server, multi-site routing, OAuth 2.1 or Application Password authentication, zero npm dependencies.
+Open-source MCP bridge that connects any AI client to your WordPress sites through the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/). Pair it with Mycelium for WordPress for the current site setup. One STDIO server supports multi-site routing and OAuth 2.1 or Application Password authentication. The core bridge uses Node.js built-ins; optional keytar provides a native credential-store backend.
 
 ## Features
 
@@ -27,11 +27,11 @@ Open-source MCP bridge that connects any AI client to your WordPress sites throu
 - **Lazy connections** — Sites connect on first use, not at startup
 - **WordPress multisite** — Subdomain-style multisite with cross-site routing through the dot-suffix model
 - **Auto-reconnect** — Exponential backoff, healthcheck pings, session recovery
-- **Zero npm dependencies** — Node.js built-in modules only
+- **Core bridge** — uses Node.js built-ins; optional keytar provides a native credential-store backend
 
 ## What You Can Do
 
-The abilities available to your AI agent depend on which ability plugins you install. With [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) installed, your agent gets access to:
+With [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress) paired on the site, your AI agent gets the abilities that Mycelium exposes, including:
 
 **Content & Publishing** — content, blocks, patterns, media, menus, taxonomies, comments, revisions
 **Site Management** — plugins, themes, settings, users, site health, cache, cron, rewrite rules
@@ -42,17 +42,21 @@ The abilities available to your AI agent depend on which ability plugins you ins
 
 Beyond Fluent, the bridge is plugin-agnostic by design. Any plugin that registers abilities through the WordPress Abilities API becomes available automatically — no configuration in this bridge required. We urge every WordPress plugin developer to prioritize native Abilities API support over anything else.
 
-Every ability enforces `current_user_can()` at execution time — your WordPress role is the security boundary, with OAuth scopes and the [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) per-module permission gate as additional layers above it (see [Notes — Four-layer permissions model](#four-layer-permissions-model)).
+Every ability enforces `current_user_can()` at execution time — your WordPress role is the security boundary, with Mycelium policy and OAuth scopes able to narrow access further (see [Notes — Four-layer permissions model](#four-layer-permissions-model)).
 
-> **Sign up for the Abilities for AI alpha release:** https://community.wickedevolutions.com/item/abilities-for-ai/
+> **Paired setup:** use [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress) with Abilities MCP. The older standalone `abilities-for-ai` + `abilities-mcp-adapter` pair remains a legacy alternative; do not install it alongside Mycelium.
 
 ## Install
 
 There are three install paths. Pick the one that matches how you use AI clients. **Path 1 (`.mcpb` for Claude Desktop, with the OAuth upgrade) is the recommended operator entry for the alpha.**
 
-### Set up WordPress (required for all paths)
+### Set up WordPress
 
-Create a dedicated WordPress user for AI access and generate an Application Password.
+For the paired setup, install and activate [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress). It provides the site-side ability and MCP integration used by this bridge.
+
+**Legacy standalone alternative:** install both [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) and [Abilities MCP Adapter](https://community.wickedevolutions.com/item/abilities-mcp-adapter/) only when you are using that older standalone setup instead of Mycelium. Do not activate the standalone pair alongside Mycelium.
+
+Create a dedicated WordPress user for AI access.
 
 **In WordPress Admin → Users → Add New:**
 
@@ -61,7 +65,7 @@ Create a dedicated WordPress user for AI access and generate an Application Pass
 | Username | `mcp-agent` (or any name you prefer) |
 | Role | **Administrator** for full access, or **Editor** for content-only access |
 
-**Then generate an Application Password:**
+**For the `.mcpb` App Password baseline, Path 2, or an App Password entry in Path 3, then generate an Application Password:**
 
 Go to **Users → Edit (your mcp-agent user) → Application Passwords**, enter a name (e.g. "MCP Bridge"), and click **Add New Application Password**. Copy the generated password — it's shown only once.
 
@@ -74,14 +78,7 @@ Go to **Users → Edit (your mcp-agent user) → Application Passwords**, enter 
 
 > **Tip:** Start with Editor. Move to Administrator when you need infrastructure abilities like plugin management, theme switching, or settings changes.
 
-#### Required plugins
-
-Install both on your WordPress site:
-
-1. **[Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/)** — registers WordPress abilities across content, site management, infrastructure, and third-party integration modules
-2. **[Abilities MCP Adapter](https://community.wickedevolutions.com/item/abilities-mcp-adapter/)** — exposes abilities as MCP tools via REST API and runs the OAuth 2.1 resource server + authorization server
-
-Both are available as free downloads from our store, or install from GitHub: [abilities-for-ai](https://github.com/Wicked-Evolutions/abilities-for-ai) and [abilities-mcp-adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter).
+OAuth configuration uses the WordPress OAuth consent flow and does not need an additional Application Password.
 
 ---
 
@@ -272,26 +269,15 @@ Bare `abilities-mcp` (no subcommand) starts the MCP STDIO server — the mode ev
 
 OAuth-managed sites added through `abilities-mcp add-site` are written to `~/.abilities-mcp/wp-sites.json` automatically — they carry an `auth.method: "oauth"` block with keychain references rather than inline secrets.
 
-### Sliding-renewal OAuth (opt-in, off by default)
+### OAuth renewal and credential lifetimes
 
-By default an OAuth credential is bounded: the refresh token expires roughly **90 days after the initial authorization**, regardless of how often the site is used, after which `reauth` is required. This is unchanged and remains the default for every site.
+The WordPress OAuth server owns its configured access-token, refresh-token and authorization lifetimes. The expiry metadata on the credential actually issued to a site is the authority; this bridge has no universal duration. A server-policy change applies only when the server issues or renews a credential under that policy—it does not retroactively extend an already-issued token.
 
-You can opt a site into **silent sliding renewal** by setting `"sliding_renewal": true` inside that site's `auth` block in `wp-sites.json`:
+Access-token expiry normally triggers automatic renewal while the wider refresh/authorization grant remains valid. The bridge persists the server's returned credential metadata, and `abilities-mcp list-sites` shows the actual recorded expiry information for an OAuth site.
 
-```json
-"sites": {
-  "mysite": {
-    "url": "https://example.com",
-    "auth": { "method": "oauth", "sliding_renewal": true, "...": "..." }
-  }
-}
-```
+`auth.sliding_renewal` remains a legacy compatibility field. It is not a switch that forces refreshes, persistence, or an extension of a grant; the server's issued metadata and policy remain authoritative.
 
-With it enabled, every successful token refresh advances the refresh-token expiry, so a site that is **actively used keeps renewing indefinitely and never forces reauth**. It still lapses normally if the site is left untouched past the window (no refresh within ~90 days → next use requires `reauth`).
-
-> ⚠️ **Security trade-off — explicit operator choice.** Sliding renewal extends the refresh window indefinitely for actively-used sites. A leaked or exfiltrated refresh token therefore has a **longer blast radius** than the default bounded credential (which self-expires ≤90 days after initial authorization no matter what). Enable it only per-site, deliberately, for sites where uninterrupted automation outweighs that exposure. It is never enabled implicitly, never by migration, and never by `add-site`/`reauth` — you must set the flag yourself.
-
-It is per-site: sites without the flag keep the default bounded behavior, byte-for-byte. `abilities-mcp list-sites` shows each OAuth site's actual `refresh_token_expires_at` so you can see the live window.
+For a transient connectivity problem, use `wp_bridge_health` and, for a degraded configured OAuth site, `wp_bridge_reconnect`; a network failure alone does not prove that consent or a grant has expired. Fresh OAuth may be needed when the grant is revoked, its refresh or authorization window is exhausted, or a diagnosed terminal credential failure leaves no safe usable pair. An ambiguous rotation state needs diagnosis rather than a blind reset.
 
 ### Config search order
 
@@ -418,13 +404,38 @@ If multiple are set: `passwordEnv` → `passwordCommand` → `password`.
 
 ## Bridge Tools
 
-The bridge provides three built-in tools (not forwarded to WordPress):
+The bridge provides four built-in tools (not forwarded to WordPress):
 
 | Tool | Description |
 |------|-------------|
 | `wp_bridge_health` | Check connectivity status of all configured WordPress sites |
+| `wp_bridge_reconnect` | Recover a completed degraded startup for one explicitly named configured site |
 | `wp_browse_tools` | List WordPress tool categories with counts (requires `toolFilter.enabled: true`) |
 | `wp_load_tools` | Activate/deactivate tool categories for lazy loading |
+
+### Recovering a completed degraded startup
+
+If the bridge started in degraded mode and the site is reachable again, call
+`wp_bridge_reconnect` with the exact configured site ID. The bridge reconnects
+only that site, privately validates MCP initialization and every page of its
+tool catalog, then announces one catalog refresh. It does not contact another
+configured site, force a token refresh, reset authorization state, or change
+OAuth consent. A healthy bridge cannot use this tool to switch its default
+site. Recovery currently supports OAuth-configured sites only; legacy carrier
+types are rejected before a connection is attempted. Reauthorize only when the
+site reports an authorization failure.
+
+The AI client must refresh its own tool catalog after that announcement. If the
+site was unavailable when the client started, reconnect may restore
+communication without restoring the tools in that current chat. In the tested
+case, the bridge reconnected and reported the site healthy, but the affected
+Codex chat still exposed only its four local bridge tools. A fresh ordinary
+online connection loaded the full remote catalog successfully. Start the site
+before opening the client where possible. Once it is reachable, start a fresh
+MCP connection when the client supports that, or restart the client if that is
+how it creates a new connection. Reauthorization is not the remedy for this
+connectivity problem. This client-catalog boundary remains tracked in
+[#125](https://github.com/Wicked-Evolutions/abilities-mcp/issues/125).
 
 ## Usage
 
@@ -476,7 +487,7 @@ See [docs/architecture.md](docs/architecture.md) for the full technical deep div
 
 When an ability is denied, the rejection comes from one of four independent layers. The runtime error names the layer:
 
-1. **Abilities for AI module permission** — per-blog read/write/delete toggle in *WP Admin → Abilities for AI → Permissions*. The runtime returns `[ability_disabled]` with the module name and where to fix it. (Fix in *Abilities for AI → Permissions*.)
+1. **Mycelium policy** — the paired site setup can narrow an ability's operation before execution. A legacy standalone site instead uses the per-blog read/write/delete toggle in *WP Admin → Abilities for AI → Permissions*; use that alternative only without Mycelium.
 2. **WordPress capability** — the WordPress user the bridge authenticates as lacks the relevant capability. WordPress core REST returns `rest_forbidden` / `rest_cannot_*` codes. (Fix by granting the cap to the user, or use a higher-privilege user.)
 3. **OAuth scope** — the bridge's OAuth token does not include the scope the ability requires. The adapter returns an `insufficient_scope` rejection. (Fix with `abilities-mcp reauth <site> --add-scope="<scope>"`.)
 4. **Unclear** — generic 500, timeout, or malformed response. Check server logs.
@@ -503,8 +514,37 @@ Concurrent bridge instances targeting the same site can cause session loss. Use 
 ## Requirements
 
 - Node.js >= 18
-- WordPress 6.9+ with [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter) installed
-- Application Passwords enabled (default in WordPress 5.6+) for the App Password path; OAuth path needs no additional setup beyond the adapter
+- WordPress 6.9+ with [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress) for the paired setup
+- Or, for the legacy standalone alternative only, [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter)
+- Application Passwords enabled (default in WordPress 5.6+) only for the App Password bundle/baseline and App Password paths; OAuth uses the site OAuth flow
+
+## MCPB maintainer build
+
+Install the locked development tools before validating or building a bundle:
+
+```bash
+npm ci
+npm run validate:mcpb
+npm run pack:mcpb
+npm run verify:pack-isolation
+```
+
+Both commands use the repository's pinned local MCPB CLI; they do not download
+or substitute a global tool. The pack step preserves the official MCPB archive
+and normalizes only its validated ZIP32 DOS timestamps to `1980-01-01`, so
+identical inputs produce a reproducible unsigned bundle. It rejects archive
+layouts outside the official unsigned single-disk ZIP32 shape rather than
+rewriting them. `verify:pack-isolation` additionally proves the temporary
+keytar prebuild staging did not alter the installed keytar package.
+
+Reproducibility is for fixed inputs, the pinned toolchain, and one build
+platform; the bundle deliberately contains platform-native keytar binaries, so
+it is not a claim that independently built artifacts from different platforms
+are byte-identical. The exact MCPB `2.1.2` development pin includes two
+ancestor-scoped security overrides: Zod `4.6.7` and tmp `0.2.7`. MCPB declares
+the former's original Zod 3 range, so pack/validate compatibility is verified
+locally before using the override. Revisit and remove these narrow overrides
+when upstream MCPB supports patched dependencies directly.
 
 ## Evolving Knowledge
 

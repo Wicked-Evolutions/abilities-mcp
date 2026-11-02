@@ -184,6 +184,12 @@ participates: runtime refresh/status changes, `add-site`, `reauth`,
 writer rereads and validates current config under the global lock, applies only
 its narrow change, then publishes it with the generation fence.
 
+Initial local bridge-config conversion uses that same commit lock. If a second
+conversion exhausts its bounded busy wait, it may report the existing no-op
+result only after a read-only check of the same canonical target confirms a
+complete, schema-valid v2 object (not merely a version field); it never lifts
+secrets, writes a backup, or repairs a live lock on that path.
+
 A lock with a readable owner is reclaimed immediately only when the same-host
 PID check confirms that owner is dead. A live, paused, PID-reused, unreadable,
 or otherwise ambiguous owner is never stolen; callers receive a typed busy or
@@ -199,6 +205,16 @@ from the local bridge state directory and retry. This never removes a keychain
 pair or configuration file, and it is an exceptional lock recovery path, not
 routine reauthorization. The bridge does not claim distributed-lock safety on
 a network filesystem.
+
+On normal completion, an owner verifies its recorded nonce and PID, then
+atomically renames only that owned directory to a unique same-directory
+`.lock.released.<id>` path before best-effort cleanup. The canonical path is
+therefore immediately available to a successor even if cleanup is delayed or
+fails. Cleanup rereads the retired owner and accepts only the expected
+`owner.json` from the same real, non-symlink directory; an unexpected or
+changed retired directory is retained. Release diagnostics use stable codes
+only and never change the completed operation's result, credential state, or
+configuration.
 
 Before any server refresh, the coordinator stores a non-secret
 `refresh_attempt` marker under the global lock **before the first HTTP send**:
@@ -312,6 +328,25 @@ No database, daemon, new dependency, plaintext credential journal, or
 server-side desktop-keychain control is proposed. Existing bridge #104 and
 #105 retain ownership of explicit macOS keychain targeting and nonblocking
 keychain operations; this scope uses only the reads/writes needed for a pair.
+
+## Loopback callback port (#119)
+
+The original Appendix H.4.5 rule from issue #12 / PR #15 selected a random
+high port. It is superseded for this bridge by one `127.0.0.1` listener with
+`port: 0`, using the positive port the operating system assigns. RFC 8252
+permits a loopback redirect URI using an ephemeral port. Dynamic registration
+receives that exact redirect URI, and authorization-code exchange uses the
+same URI after the listener is closed during callback cleanup. The listener is
+retained through callback handling. This preserves the fresh-client guard: a
+previous client registration cannot be reused for a newly assigned port.
+
+`exclusive: true` remains on the Node listener to avoid shared cluster-handle
+use. It is not an assertion about `SO_REUSEADDR`. One failed bind produces a
+typed `loopback_bind_failed` error with `attempts: 1` and only the platform
+error code as its cause; it does not begin dynamic registration or browser
+consent. A non-positive or malformed assigned port is rejected and the
+listener is closed. No retry widening, callback-path change, PKCE/state
+relaxation, or Mycelium setting is part of this supersession.
 
 ## Tests, maintenance, and stop conditions
 

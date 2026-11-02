@@ -56,6 +56,151 @@ describe('TokenManager.getAccessToken — refresh window (H.2.1 + Token-refresh)
       assert.match(result.accessToken, /^at-/);
     } finally { if (server) await server.stop(); }
   });
+
+  it('keeps a still-valid bearer after only proven-unsent proactive refresh failures', async () => {
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/access', 'AT-still-valid');
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+    let attempts = 0;
+    const dnsFailure = () => Object.assign(new Error('temporary DNS failure'), {
+      code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+    });
+    const tm = new TokenManager({
+      secretStore: store,
+      deps: {
+        now: () => now,
+        sleep: () => Promise.resolve(),
+        postForm: async (_url, _params, options) => {
+          attempts += 1;
+          assert.equal(options.freshSocket, true, 'refreshes demand a fresh socket for delivery proof');
+          throw dnsFailure();
+        },
+      },
+    });
+    const result = await tm.getAccessToken(buildSiteAuth({
+      accessTokenExpiresAt: new Date(now + 240_000).toISOString(),
+      refreshTokenExpiresAt: new Date(now + 90 * 24 * 3600 * 1000).toISOString(),
+    }));
+    assert.equal(attempts, 2, 'bounded retry chain was attempted');
+    assert.equal(result.accessToken, 'AT-still-valid');
+    assert.equal(result.refreshed, false);
+    assert.equal(result.refreshDeferred, true);
+  });
+
+  it('does not reuse the bearer after an ambiguous proactive refresh failure', async () => {
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/access', 'AT-still-valid');
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+    let attempts = 0;
+    const tm = new TokenManager({
+      secretStore: store,
+      deps: {
+        now: () => now,
+        sleep: () => Promise.resolve(),
+        postForm: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw Object.assign(new Error('temporary DNS failure'), {
+              code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+            });
+          }
+          throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
+        },
+      },
+    });
+    await assert.rejects(
+      tm.getAccessToken(buildSiteAuth({ accessTokenExpiresAt: new Date(now + 240_000).toISOString() })),
+      (err) => err.code === 'network_error' && err.refreshDelivery === 'unknown'
+    );
+    assert.equal(attempts, 2);
+  });
+
+  it('does not reuse the bearer after a token-endpoint 5xx then a proven-unsent failure', async () => {
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const store = new MemorySecretStore();
+    await store.set(SECRET_SERVICE, 'siteA/access', 'AT-still-valid');
+    await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+    let attempts = 0;
+    const tm = new TokenManager({
+      secretStore: store,
+      deps: {
+        now: () => now,
+        sleep: () => Promise.resolve(),
+        postForm: async () => {
+          attempts += 1;
+          if (attempts === 1) return { statusCode: 503, body: '', json: null };
+          throw Object.assign(new Error('temporary DNS failure'), {
+            code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+          });
+        },
+      },
+    });
+    await assert.rejects(
+      tm.getAccessToken(buildSiteAuth({ accessTokenExpiresAt: new Date(now + 240_000).toISOString() })),
+      (err) => err.code === 'network_error' && err.refreshDelivery === 'unknown'
+    );
+    assert.equal(attempts, 2, 'the received 5xx invalidates the full retry chain');
+  });
+
+  it('does not use the proactive fallback after forced refresh, access expiry, or a passed fixed deadline', async () => {
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const failure = () => Object.assign(new Error('temporary DNS failure'), {
+      code: 'EAI_AGAIN', oauthDelivery: 'proven_not_dispatched',
+    });
+    const makeManager = async () => {
+      const store = new MemorySecretStore();
+      await store.set(SECRET_SERVICE, 'siteA/access', 'AT');
+      await store.set(SECRET_SERVICE, 'siteA/refresh', 'RT');
+      return new TokenManager({
+        secretStore: store,
+        deps: { now: () => now, sleep: () => Promise.resolve(), postForm: async () => { throw failure(); } },
+      });
+    };
+
+    await assert.rejects(
+      (await makeManager()).getAccessToken(
+        buildSiteAuth({ accessTokenExpiresAt: new Date(now + 240_000).toISOString() }),
+        { forceRefresh: true }
+      ),
+      (err) => err.code === 'network_error' && err.refreshDelivery === 'proven_not_dispatched'
+    );
+    await assert.rejects(
+      (await makeManager()).getAccessToken(
+        buildSiteAuth({ accessTokenExpiresAt: new Date(now - 1).toISOString() })
+      ),
+      (err) => err.code === 'network_error' && err.refreshDelivery === 'proven_not_dispatched'
+    );
+    await assert.rejects(
+      (await makeManager()).getAccessToken(
+        buildSiteAuth({
+          accessTokenExpiresAt: new Date(now + 240_000).toISOString(),
+          authorizationExpiresAt: new Date(now - 1).toISOString(),
+        })
+      ),
+      (err) => err.code === 'network_error' && err.refreshDelivery === 'proven_not_dispatched'
+    );
+  });
+
+  it('does not reuse a bearer when the durable credential generation changed', async () => {
+    const now = Date.parse('2026-10-29T00:00:00.000Z');
+    const store = new MemorySecretStore();
+    const tm = new TokenManager({ secretStore: store, deps: { now: () => now } });
+    const original = buildSiteAuth({
+      credentialGeneration: 'generation-original',
+      accessTokenExpiresAt: new Date(now + 240_000).toISOString(),
+    });
+    tm._hydratePair = async () => ({
+      ...original,
+      credentialGeneration: 'generation-replaced',
+      _accessToken: 'AT-replaced',
+    });
+    const fallback = await tm._provenUnsentProactiveFallback(original, {
+      refreshDelivery: 'proven_not_dispatched',
+    });
+    assert.equal(fallback, null);
+  });
 });
 
 describe('TokenManager authoritative expiry metadata', () => {
