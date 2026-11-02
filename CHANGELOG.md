@@ -4,9 +4,9 @@ All notable changes to Abilities MCP are documented here.
 
 ## [Unreleased]
 
-## [1.7.0] — Proposed / unpublished
+## [1.7.0] — 2026-11-02
 
-### Included in this release candidate
+### Added and fixed
 
 - **Coordinated OAuth renewal** so concurrent bridge activity shares one durable
   credential operation instead of competing refreshes.
@@ -40,8 +40,6 @@ All notable changes to Abilities MCP are documented here.
   fresh MCP connection or restart the client after the site is reachable;
   reauthorization is not the remedy. The boundary is tracked in
   [#125](https://github.com/Wicked-Evolutions/abilities-mcp/issues/125).
-- This is a proposed, unpublished candidate. Merge, tag, and release
-  publication remain founder decisions.
 
 ## [1.6.6] - 2026-06-14
 
