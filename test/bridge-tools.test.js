@@ -5,13 +5,14 @@ const assert = require('node:assert/strict');
 const { BRIDGE_TOOLS, isBridgeTool, injectBridgeTools } = require('../lib/bridge-tools');
 
 describe('BRIDGE_TOOLS', () => {
-  it('contains exactly 3 bridge tools', () => {
-    assert.equal(BRIDGE_TOOLS.length, 3);
+  it('contains exactly 4 bridge tools', () => {
+    assert.equal(BRIDGE_TOOLS.length, 4);
   });
 
-  it('has wp_bridge_health, wp_browse_tools, wp_load_tools', () => {
+  it('has health, reconnect, browse, and load tools', () => {
     const names = BRIDGE_TOOLS.map(t => t.name);
     assert.ok(names.includes('wp_bridge_health'));
+    assert.ok(names.includes('wp_bridge_reconnect'));
     assert.ok(names.includes('wp_browse_tools'));
     assert.ok(names.includes('wp_load_tools'));
   });
@@ -29,6 +30,7 @@ describe('BRIDGE_TOOLS', () => {
 describe('isBridgeTool', () => {
   it('returns true for bridge tool names', () => {
     assert.equal(isBridgeTool('wp_bridge_health'), true);
+    assert.equal(isBridgeTool('wp_bridge_reconnect'), true);
     assert.equal(isBridgeTool('wp_browse_tools'), true);
     assert.equal(isBridgeTool('wp_load_tools'), true);
   });
@@ -44,7 +46,7 @@ describe('injectBridgeTools', () => {
   it('appends bridge tools to tools array', () => {
     const msg = { result: { tools: [{ name: 'content-list' }] } };
     injectBridgeTools(msg);
-    assert.equal(msg.result.tools.length, 4); // 1 original + 3 bridge
+    assert.equal(msg.result.tools.length, 5); // 1 original + 4 bridge
     assert.equal(msg.result.tools[0].name, 'content-list');
     assert.equal(msg.result.tools[1].name, 'wp_bridge_health');
   });
@@ -52,7 +54,7 @@ describe('injectBridgeTools', () => {
   it('handles empty tools array', () => {
     const msg = { result: { tools: [] } };
     injectBridgeTools(msg);
-    assert.equal(msg.result.tools.length, 3);
+    assert.equal(msg.result.tools.length, 4);
   });
 
   it('does nothing for non-tools response', () => {

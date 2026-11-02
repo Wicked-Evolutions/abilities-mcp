@@ -2,8 +2,10 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 
 const { OAuthClient, DEFAULT_SCOPE } = require('../../lib/auth/oauth-client');
+const { LoopbackServer } = require('../../lib/auth/loopback-server');
 const { TokenManager } = require('../../lib/auth/token-manager');
 const { FreshEachTimeIdentityProvider } = require('../../lib/auth/fresh-each-time-identity');
 const { MemorySecretStore } = require('../../lib/auth/memory-secret-store');
@@ -82,6 +84,49 @@ describe('OAuthClient — full flow against MockAuthServer', () => {
     const r = await client.run();
     assert.equal(typeof DEFAULT_SCOPE, 'string');
     assert.deepEqual(r.scopes.sort(), ['abilities:read', 'abilities:write'].sort());
+  });
+
+  it('does not register a client or launch a browser when loopback binding fails', async () => {
+    let registrationCalls = 0;
+    let browserCalls = 0;
+    let bindAttempts = 0;
+    class EaccesLoopbackServer extends LoopbackServer {
+      constructor(args) {
+        const fakeServer = new EventEmitter();
+        fakeServer.listen = () => {
+          bindAttempts += 1;
+          process.nextTick(() => {
+            const cause = new Error('machine-local bind detail');
+            cause.code = 'EACCES';
+            fakeServer.emit('error', cause);
+          });
+        };
+        super({ ...args, serverFactory: () => fakeServer });
+      }
+    }
+    const client = new OAuthClient({
+      siteUrl: server.siteUrl,
+      clientName: 'Test',
+      softwareVersion: '1.4.0',
+      identityProvider: newIdp(),
+      allowInsecure: true,
+      deps: {
+        LoopbackServer: EaccesLoopbackServer,
+        register: async () => { registrationCalls += 1; },
+        openBrowser: async () => { browserCalls += 1; },
+      },
+    });
+    await assert.rejects(client.run(), (error) => {
+      assert.equal(error.code, 'loopback_bind_failed');
+      assert.equal(error.attempts, 1);
+      assert.deepEqual(error.cause, { code: 'EACCES' });
+      assert.doesNotMatch(error.message, /machine-local bind detail/);
+      return true;
+    });
+    assert.equal(bindAttempts, 1);
+    assert.equal(registrationCalls, 0);
+    assert.equal(browserCalls, 0);
+    assert.equal(client.state, STATES.FAILED);
   });
 
   it('anchors initial token expiry to the authorization-code request start', async () => {

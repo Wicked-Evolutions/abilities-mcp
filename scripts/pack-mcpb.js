@@ -46,13 +46,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
+const { normalizeZip32Timestamps } = require('./zip32-timestamps');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const STAGING = path.join(PROJECT_ROOT, 'dist-mcpb', 'staging');
 const OUTPUT = path.join(PROJECT_ROOT, 'abilities-mcp.mcpb');
 const KEYTAR_SRC = path.join(PROJECT_ROOT, 'node_modules', 'keytar');
 const KEYTAR_DST = path.join(STAGING, 'node_modules', 'keytar');
+const MCPB_CLI = path.join(PROJECT_ROOT, 'node_modules', '@anthropic-ai', 'mcpb', 'dist', 'cli', 'cli.js');
+const PREBUILD_INSTALL_CLI = path.join(PROJECT_ROOT, 'node_modules', 'prebuild-install', 'bin.js');
 
 // Platforms supported by both keytar's prebuild matrix and manifest.json's
 // compatibility.platforms. arm64 Linux / Windows ARM64 / FreeBSD are out of
@@ -88,6 +91,22 @@ function copyDir(src, dst) {
 function log(msg) {
   process.stdout.write(`[pack-mcpb] ${msg}\n`);
 }
+
+function requireLocalTool(toolPath, name) {
+  if (!fs.existsSync(toolPath)) {
+    throw new Error(
+      `pack-mcpb.js: installed local ${name} is missing at ${toolPath}.\n` +
+      'Run `npm ci` from the repository root before packaging.'
+    );
+  }
+}
+
+function runNodeTool(toolPath, args, options) {
+  execFileSync(process.execPath, [toolPath, ...args], options);
+}
+
+requireLocalTool(MCPB_CLI, '@anthropic-ai/mcpb');
+requireLocalTool(PREBUILD_INSTALL_CLI, 'prebuild-install');
 
 // ---------------------------------------------------------------------------
 // 1. Build clean staging dir
@@ -129,31 +148,50 @@ fs.copyFileSync(
 
 const HOST_BINARY = path.join(KEYTAR_SRC, 'build', 'Release', 'keytar.node');
 const HOST_BACKUP = path.join(KEYTAR_SRC, 'build', 'Release', 'keytar.node.host-backup');
+const hostBinaryExisted = fs.existsSync(HOST_BINARY);
+let hostBackupCreated = false;
 
-if (!fs.existsSync(HOST_BINARY)) {
-  log('Host keytar binary missing — fetching for current platform first…');
-  execSync('npx --yes prebuild-install --runtime napi --target 3', {
-    cwd: KEYTAR_SRC, stdio: 'inherit',
-  });
+try {
+  if (!hostBinaryExisted) {
+    log('Host keytar binary missing — fetching for current platform first…');
+    runNodeTool(PREBUILD_INSTALL_CLI, ['--runtime', 'napi', '--target', '3'], {
+      cwd: KEYTAR_SRC, stdio: 'inherit',
+    });
+  }
+
+  if (!fs.existsSync(HOST_BINARY)) {
+    throw new Error('pack-mcpb.js: local prebuild-install did not create keytar.node.');
+  }
+
+  if (hostBinaryExisted) {
+    log('Stashing host platform binary for restoration…');
+    fs.copyFileSync(HOST_BINARY, HOST_BACKUP);
+    hostBackupCreated = true;
+  }
+
+  for (const { platform, arch } of TARGETS) {
+    log(`Fetching keytar prebuild: ${platform}-${arch}`);
+    runNodeTool(PREBUILD_INSTALL_CLI, [
+      '--platform', platform,
+      '--arch', arch,
+      '--runtime', 'napi',
+      '--target', '3',
+    ], { cwd: KEYTAR_SRC, stdio: 'inherit' });
+    const targetSubdir = path.join(KEYTAR_DST, 'build', 'Release', `${platform}-${arch}`);
+    fs.mkdirSync(targetSubdir, { recursive: true });
+    fs.copyFileSync(HOST_BINARY, path.join(targetSubdir, 'keytar.node'));
+  }
+} finally {
+  if (hostBackupCreated && fs.existsSync(HOST_BACKUP)) {
+    log('Restoring host platform keytar binary…');
+    fs.copyFileSync(HOST_BACKUP, HOST_BINARY);
+    fs.unlinkSync(HOST_BACKUP);
+  } else if (!hostBinaryExisted && fs.existsSync(HOST_BINARY)) {
+    // If this run created the host binary, return node_modules to its prior
+    // missing state even when a later target download failed.
+    fs.unlinkSync(HOST_BINARY);
+  }
 }
-
-log('Stashing host platform binary for restoration…');
-fs.copyFileSync(HOST_BINARY, HOST_BACKUP);
-
-for (const { platform, arch } of TARGETS) {
-  log(`Fetching keytar prebuild: ${platform}-${arch}`);
-  execSync(
-    `npx --yes prebuild-install --platform ${platform} --arch ${arch} --runtime napi --target 3`,
-    { cwd: KEYTAR_SRC, stdio: 'inherit' }
-  );
-  const targetSubdir = path.join(KEYTAR_DST, 'build', 'Release', `${platform}-${arch}`);
-  fs.mkdirSync(targetSubdir, { recursive: true });
-  fs.copyFileSync(HOST_BINARY, path.join(targetSubdir, 'keytar.node'));
-}
-
-log('Restoring host platform keytar binary…');
-fs.copyFileSync(HOST_BACKUP, HOST_BINARY);
-fs.unlinkSync(HOST_BACKUP);
 
 // ---------------------------------------------------------------------------
 // 4. Patch keytar's lib/keytar.js in the staged copy with a multi-platform-
@@ -242,9 +280,9 @@ log('Patched staged keytar/lib/keytar.js for multi-platform binary routing.');
 // ---------------------------------------------------------------------------
 
 log('Running mcpb pack against staging…');
-execSync(
-  `npx --yes @anthropic-ai/mcpb pack "${STAGING}" "${OUTPUT}"`,
-  { stdio: 'inherit' }
-);
+runNodeTool(MCPB_CLI, ['pack', STAGING, OUTPUT], { stdio: 'inherit' });
+
+const normalized = normalizeZip32Timestamps(OUTPUT);
+log(`Normalized ${normalized.entryCount} ZIP entries to 1980-01-01; sha256 ${normalized.sha256}`);
 
 log(`Bundle written to ${path.relative(PROJECT_ROOT, OUTPUT)}`);

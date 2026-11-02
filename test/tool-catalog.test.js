@@ -51,6 +51,17 @@ describe('ToolCatalog', () => {
     assert.ok(catNames.includes('mcp-adapter'));
   });
 
+  it('accepts prototype-named categories without mutating a live catalog during preparation', () => {
+    const catalog = makeCatalog();
+    catalog.cacheTools([{ name: 'content-list' }]);
+    const previousTools = catalog.fullTools;
+    const prepared = catalog.prepareTools([{ name: 'constructor' }]);
+    assert.equal(catalog.fullTools, previousTools, 'preparation alone is non-mutating');
+    catalog.installPreparedTools(prepared);
+    assert.deepEqual(catalog.fullTools.map((tool) => tool.name), ['constructor']);
+    assert.deepEqual(catalog.getCategorySummary().map((category) => category.name), ['constructor']);
+  });
+
   it('getFilteredTools returns only essential + always-included by default', () => {
     const catalog = makeCatalog();
     catalog.cacheTools(SAMPLE_TOOLS);
@@ -65,6 +76,12 @@ describe('ToolCatalog', () => {
     // Other categories should not be included
     assert.ok(!names.includes('content-list'));
     assert.ok(!names.includes('fluent-crm-list-contacts'));
+  });
+
+  it('filterTools admits newly received tools in an enabled category without requiring a prior cache write', () => {
+    const catalog = makeCatalog({ alwaysIncludeCategories: ['content'] });
+    catalog.cacheTools([{ name: 'content-list' }]);
+    assert.deepEqual(catalog.filterTools([{ name: 'content-new' }, { name: 'media-new' }]).map((tool) => tool.name), ['content-new']);
   });
 
   it('activateCategories loads additional tools', () => {

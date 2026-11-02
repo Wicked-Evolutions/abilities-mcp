@@ -96,6 +96,25 @@ describe('OAuthHttpTransport — bearer header construction', () => {
   });
 });
 
+describe('OAuthHttpTransport — redacted recovery error classification', () => {
+  it('preserves only an allowlisted authorization or credential code on emitted JSON-RPC errors', async () => {
+    for (const code of ['oauth_bearer_rejected', 'credential_operation_busy']) {
+      const failure = new Error('provider detail must not become classification data');
+      failure.code = code;
+      const transport = new OAuthHttpTransport({
+        endpoint: 'http://127.0.0.1:1/mcp',
+        tokenManager: { async getAccessToken() { throw failure; } },
+        siteAuth: { siteId: 'siteA' }, logger: () => {},
+      });
+      await transport.connect();
+      const result = await send(transport, JSON.stringify({ jsonrpc: '2.0', id: code, method: 'initialize', params: {} }));
+      assert.equal(result.parsedMsg.error.code, -32000);
+      assert.deepEqual(result.parsedMsg.error.data, { recoveryCode: code });
+      await transport.shutdown();
+    }
+  });
+});
+
 describe('OAuthHttpTransport — pre-expiry refresh (H.2.1, 300s window)', () => {
   it('refreshes when access_token_expires_at is inside the 300s window, then uses the new token', async () => {
     // Seed the resource to accept ONLY the freshly-minted token. The cached
