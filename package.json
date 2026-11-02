@@ -1,6 +1,6 @@
 {
   "name": "@wickedevolutions/abilities-mcp",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Mycelium Abilities MCP for WordPress — an MCP bridge connecting AI clients to governed WordPress abilities",
   "main": "abilities-mcp.js",
   "bin": {

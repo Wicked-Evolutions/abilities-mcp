@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * abilities-mcp v1.7.0
+ * abilities-mcp v1.7.1
  *
  * One MCP to Rule Your WordPress World.
  *
@@ -16,7 +16,7 @@
  *
  * Copyright (C) 2026 Influencentricity | Wicked Evolutions
  * @package Wicked-Evolutions/abilities-mcp
- * @version 1.7.0
+ * @version 1.7.1
  * @license GPL-2.0-or-later
  */
 
