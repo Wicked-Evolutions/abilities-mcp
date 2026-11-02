@@ -4,6 +4,19 @@ All notable changes to Abilities MCP are documented here.
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-11-02
+
+### Documentation
+
+- Presents the bridge publicly as Mycelium Abilities MCP for WordPress while
+  preserving existing technical package, command, configuration, and site IDs.
+- Documents the paired setup with Mycelium for WordPress and keeps legacy
+  standalone-product guidance separate from the product README.
+- Clarifies that legacy Application Password sources are imported once into the
+  operating-system credential store; changing a prior environment variable or
+  command does not rotate the imported credential. No runtime behavior changes
+  are included in this release.
+
 ## [1.7.0] — 2026-11-02
 
 ### Added and fixed
