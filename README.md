@@ -390,7 +390,7 @@ Each connection receives an OAuth credential bound to that subsite's resource. U
 
 ### Application Password multisite routing
 
-A hand-managed configuration can define subsite URLs:
+A site entry inside the `sites` object of a hand-managed `wp-sites.json` can define subsite URLs:
 
 ```json
 {
@@ -424,7 +424,7 @@ The bare site name targets the configured root. The dot suffix selects a cross-s
 
 ### `passwordCommand`
 
-Retrieve a password through a command instead of storing it directly in the site configuration.
+For a legacy v1 `wp-sites.json`, this command supplies the password during one-time migration. The bridge stores that value in the operating-system credential store and replaces the legacy field with a stored-credential reference. Changing the command later does not rotate the imported credential.
 
 Example:
 
@@ -474,7 +474,7 @@ Corresponding command:
 
 ### `passwordEnv`
 
-Read the password from an environment variable:
+For a legacy v1 `wp-sites.json`, this environment variable supplies the password during one-time migration. The bridge stores that value in the operating-system credential store and replaces the legacy field with a stored-credential reference. Changing the environment variable later does not rotate the imported credential.
 
 ```json
 {
@@ -484,25 +484,21 @@ Read the password from an environment variable:
 }
 ```
 
-Set the variable in the environment that launches the bridge:
+Set the variable in the environment that launches the migration:
 
 ```bash
 export WP_MCP_PASSWORD="xxxx xxxx xxxx xxxx xxxx xxxx"
 ```
 
-The bridge reads that environment variable when connecting.
+The migration reads that environment variable once. After migration, the bridge uses the stored-credential reference.
 
 ### Inline `password`
 
-A plaintext `password` field is supported, but keeping credentials in configuration files exposes them to copies, backups and accidental sharing.
+For a legacy v1 configuration, a plaintext `password` field is supported, but keeping credentials in configuration files exposes them to copies, backups and accidental sharing.
 
-### Precedence
+### Legacy migration behavior
 
-When more than one password source is present:
-
-```text
-passwordEnv → passwordCommand → password
-```
+Use exactly one password source per legacy site. On the first bridge start after upgrade, migration resolves one value—inline `password` first, then `passwordEnv`, then `passwordCommand`—stores it in the operating-system credential store, and removes those legacy source fields. Later connections use the stored-credential reference; changing an old environment variable or command does not rotate the imported credential.
 
 ### macOS OAuth credential access
 
