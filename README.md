@@ -1,30 +1,20 @@
-# Abilities MCP
+# Mycelium Abilities MCP for WordPress
 
-> **A word from J, the director of this creation.**
->
-> Everything you see here is built by a single human who does not read or write code and is written by AI. Everything is in constant motion and by observing that movement we create the illusion of being still. Change happens at any given moment. It is simply a law of evolution. Stillness is an act of conscious awareness, not a reality of life.
+Mycelium Abilities MCP for WordPress is the local MCP bridge that connects an AI client to one or more WordPress sites. It is the AI-client half of the Mycelium pairing: [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress) runs on the site and governs its abilities, while this bridge runs in the AI-client environment and routes calls to them.
 
-## Welcome, Wordpressnaut
+The bridge uses the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/) and MCP. It supports OAuth 2.1 and Application Password connections, multi-site routing, and a local credential store. The bridge does not give an AI client additional authority: the WordPress user, Mycelium policy, and OAuth scopes determine what it can do.
 
-Here is the spaceship, now you'll have to learn how to fly and please do remember, humans make mistakes, humans created AI so AI makes mistakes. Learning to fly is your job and to do that you'll need structure, systems, checklists, principles and understanding you stand before a magical leap of a steep and wonderful learning curve. Be patient and do backup things.
+Some existing client configurations and installation screens still use the short technical label **Abilities MCP**. The package, command, configuration keys, and server identity retain that compatible technical name.
 
-→ Knowledge layer (deeper traversal): [https://knowledge.wickedevolutions.com](https://knowledge.wickedevolutions.com)
-→ [https://wickedevolutions.com](https://wickedevolutions.com)
-→ [https://abilitiesforai.io](https://abilitiesforai.io)
-
-Our development aim is the *Official WordPress Compatibility Contract* — see [PRINCIPLES.md](PRINCIPLES.md) for the full binding principles across the four-repo suite.
-
----
-
-Open-source MCP bridge that connects any AI client to your WordPress sites through the [WordPress Abilities API](https://developer.wordpress.org/reference/functions/wp_register_ability/). Pair it with Mycelium for WordPress for the current site setup. One STDIO server supports multi-site routing and OAuth 2.1 or Application Password authentication. The core bridge uses Node.js built-ins; optional keytar provides a native credential-store backend.
+For a new setup, install Mycelium for WordPress on the site, use a dedicated WordPress user with only the needed capabilities, then choose an installation path below for the AI client. Mycelium is a new product currently being prepared for wider public launch. Its repository and release downloads require access until that launch.
 
 ## Features
 
 - **Multi-site routing** — Single MCP server serves all your WordPress sites
 - **OAuth 2.1** — Dynamic Client Registration, PKCE, browser-loopback consent, keychain-backed tokens, automatic refresh, scope expansion
-- **Application Password** — Application Passwords with MCP session management (the legacy alpha-supported path; OAuth is recommended)
+- **Application Password** — Application Passwords with MCP session management
 - **Site parameter injection** — LLM sees a `site` enum on every tool, defaults to your primary site
-- **Lazy connections** — Sites connect on first use, not at startup
+- **Lazy connections** — Additional non-default sites connect on first use; the primary site connects at startup
 - **WordPress multisite** — Subdomain-style multisite with cross-site routing through the dot-suffix model
 - **Auto-reconnect** — Exponential backoff, healthcheck pings, session recovery
 - **Core bridge** — uses Node.js built-ins; optional keytar provides a native credential-store backend
@@ -36,25 +26,46 @@ With [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-
 **Content & Publishing** — content, blocks, patterns, media, menus, taxonomies, comments, revisions
 **Site Management** — plugins, themes, settings, users, site health, cache, cron, rewrite rules
 **Infrastructure** — filesystem, meta, REST discovery, knowledge layer
-**Third-party integrations** — auto-detected modules for supported plugins (Astra, Spectra, SureCart, Presto Player, and more)
+**Third-party integrations** — auto-detected modules for supported plugins and themes (Astra, Spectra, SureCart, Presto Player, and more)
 
-**[Abilities for Fluent Plugins](https://github.com/Wicked-Evolutions/abilities-for-fluent-plugins)** is our continuously-enhanced first-party translator — bringing AI control to FluentCRM, FluentCommunity, FluentForms, FluentBooking, FluentSupport, FluentBoards, FluentSMTP, FluentAuth, FluentSnippets, FluentMessaging, FluentCart, and FluentAffiliate. We build and maintain it because we use Fluent's plugins ourselves and wanted them AI-native.
-
-Beyond Fluent, the bridge is plugin-agnostic by design. Any plugin that registers abilities through the WordPress Abilities API becomes available automatically — no configuration in this bridge required. We urge every WordPress plugin developer to prioritize native Abilities API support over anything else.
+Mycelium includes conditional Fluent integrations when the relevant Fluent plugins are installed and active. The bridge can use abilities that the site-side MCP server exposes under its metadata, policy, and permission checks; a WordPress registration alone is not a guarantee of exposure.
 
 Every ability enforces `current_user_can()` at execution time — your WordPress role is the security boundary, with Mycelium policy and OAuth scopes able to narrow access further (see [Notes — Four-layer permissions model](#four-layer-permissions-model)).
 
-> **Paired setup:** use [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress) with Abilities MCP. The older standalone `abilities-for-ai` + `abilities-mcp-adapter` pair remains a legacy alternative; do not install it alongside Mycelium.
+> **Paired setup:** use [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress) with Mycelium Abilities MCP for WordPress. Earlier standalone products are a migration and compatibility path only; do not install them alongside Mycelium. See [legacy setup notes](https://github.com/Wicked-Evolutions/abilities-mcp/blob/main/docs/legacy-setup.md).
 
 ## Install
 
-There are three install paths. Pick the one that matches how you use AI clients. **Path 1 (`.mcpb` for Claude Desktop, with the OAuth upgrade) is the recommended operator entry for the alpha.**
+There are three installation paths. Choose the one that matches the AI client and connection type you use. OAuth through the CLI is the preferred path for a new managed connection; the `.mcpb` bundle is an Application Password baseline and can later be upgraded to OAuth.
+
+### OAuth quickstart for a local desktop client
+
+After the package version you need is published to npm, install the CLI and add the site. This opens the site's OAuth consent flow; it does not need an Application Password.
+
+```bash
+npm install -g @wickedevolutions/abilities-mcp
+abilities-mcp add-site https://example.com
+```
+
+For JSON-based local desktop or development clients, configure the bridge over standard input/output:
+
+```json
+{
+  "mcpServers": {
+    "wordpress": {
+      "command": "abilities-mcp"
+    }
+  }
+}
+```
+
+The bridge reads the OAuth site configuration it just created. Use the detailed paths below for MCPB, environment-variable, or hand-managed multi-site configuration.
+
+ChatGPT desktop and Codex use their own local configuration; see [Configure Codex for consistency](https://learn.chatgpt.com/guides/best-practices#configure-codex-for-consistency) for the current `~/.codex/config.toml` guidance.
 
 ### Set up WordPress
 
 For the paired setup, install and activate [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress). It provides the site-side ability and MCP integration used by this bridge.
-
-**Legacy standalone alternative:** install both [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) and [Abilities MCP Adapter](https://community.wickedevolutions.com/item/abilities-mcp-adapter/) only when you are using that older standalone setup instead of Mycelium. Do not activate the standalone pair alongside Mycelium.
 
 Create a dedicated WordPress user for AI access.
 
@@ -82,13 +93,13 @@ OAuth configuration uses the WordPress OAuth consent flow and does not need an a
 
 ---
 
-### Path 1 — `.mcpb` bundle for Claude Desktop with OAuth upgrade (recommended)
+### Path 1 — `.mcpb` bundle for Claude Desktop (Application Password baseline)
 
-The full alpha-recommended operator path: install the `.mcpb` for single-click Claude Desktop integration, then upgrade in place to OAuth so tokens live in your OS keychain (macOS Keychain / Windows Credential Manager) and refresh automatically.
+Install the `.mcpb` in Claude Desktop with an Application Password. You can then install the CLI and upgrade that connection to OAuth, so tokens live in your operating system's credential store and renew automatically.
 
 #### Step 1 — install the `.mcpb` (Application Password baseline)
 
-1. Download `abilities-mcp.mcpb` from the [latest GitHub Release](https://github.com/Wicked-Evolutions/abilities-mcp/releases/latest).
+1. Download an `abilities-mcp.mcpb` release asset that is available to you from the [releases page](https://github.com/Wicked-Evolutions/abilities-mcp/releases).
 2. Double-click the file. Claude Desktop opens an "Install Extension" dialog.
 3. Type three things:
    - **WordPress Site URL** — `https://example.com`
@@ -104,7 +115,7 @@ The bundle covers the single-site case. To unlock OAuth, multi-site, and the `ad
 npm install -g @wickedevolutions/abilities-mcp
 ```
 
-This puts the `abilities-mcp` command on your PATH so you can run the OAuth subcommands from a terminal.
+After the package version you need is published to npm, this puts the `abilities-mcp` command on your PATH so you can run the OAuth subcommands from a terminal.
 
 #### Step 3 — upgrade your Claude Desktop site to OAuth in place
 
@@ -123,7 +134,7 @@ abilities-mcp add-site https://third-site.com --label="My Staging Site"
 
 Each added site provisions OAuth via Dynamic Client Registration, runs the consent flow in your browser, and persists tokens to the keychain. New sites surface through the same Claude Desktop "Abilities MCP" entry — no Claude Desktop config edit needed.
 
-For App Password sites instead of OAuth (legacy path), pass `--apppassword --username=<user> --password=<pw>`.
+For an Application Password site instead of OAuth, pass `--apppassword --username=<user> --password=<pw>`.
 
 #### Step 5 — expand scopes when broader powers are needed
 
@@ -141,7 +152,7 @@ The `--add-scope=` flag merges the new scopes into the existing set (deduped, or
 
 ### Path 2 — Env vars (Claude Code, Cursor, Docker, any MCP client)
 
-Install the bridge from npm, then point your client at it with three environment variables:
+After the package version you need is published to npm, install the bridge and point your client at it with three environment variables:
 
 ```bash
 npm install -g @wickedevolutions/abilities-mcp
@@ -459,13 +470,13 @@ Omit `site` to use the default site. For multisite networks, the `site` enum sur
 
 ```mermaid
 graph TD
-    Client[AI Client<br/>Claude Code · Gemini CLI · Cursor · any MCP client] -->|STDIO| Bridge[Abilities MCP]
+    Client[AI Client<br/>Claude Code · Gemini CLI · Cursor · any MCP client] -->|STDIO| Bridge[Mycelium Abilities MCP<br/>for WordPress]
     Bridge -->|OAuth 2.1 / HTTP POST| SiteA[Site A]
     Bridge -->|App Password / HTTP POST| SiteB[Site B]
     Bridge -->|SSH + WP-CLI| SiteC[Site C]
 
     subgraph "Each WordPress Site"
-        Adapter[Abilities MCP Adapter] --> AbilitiesAPI[WordPress Abilities API]
+        Mycelium[Mycelium for WordPress] --> AbilitiesAPI[WordPress Abilities API]
         AbilitiesAPI --> Plugins[Ability Plugins]
     end
 ```
@@ -485,14 +496,14 @@ See [docs/architecture.md](docs/architecture.md) for the full technical deep div
 
 ### Four-layer permissions model
 
-When an ability is denied, the rejection comes from one of four independent layers. The runtime error names the layer:
+When an ability is denied, the first three checks below apply together. Other errors are diagnostic failures, not an additional permission gate:
 
 1. **Mycelium policy** — the paired site setup can narrow an ability's operation before execution. A legacy standalone site instead uses the per-blog read/write/delete toggle in *WP Admin → Abilities for AI → Permissions*; use that alternative only without Mycelium.
 2. **WordPress capability** — the WordPress user the bridge authenticates as lacks the relevant capability. WordPress core REST returns `rest_forbidden` / `rest_cannot_*` codes. (Fix by granting the cap to the user, or use a higher-privilege user.)
 3. **OAuth scope** — the bridge's OAuth token does not include the scope the ability requires. The adapter returns an `insufficient_scope` rejection. (Fix with `abilities-mcp reauth <site> --add-scope="<scope>"`.)
-4. **Unclear** — generic 500, timeout, or malformed response. Check server logs.
+4. **Unclear error** — a generic 500, timeout, or malformed response is not a permission result. Check server logs.
 
-The four gates apply together by design (see [PRINCIPLES.md](PRINCIPLES.md), Principle 5 — *Permissions Stay Layered*). The runtime error tells you which gate fired so you can act at the right layer.
+The three permission checks apply together by design (see [PRINCIPLES.md](PRINCIPLES.md), Principle 5 — *Permissions Stay Layered*). The runtime error tells you which check or diagnostic path needs attention.
 
 ### Paired ability classes
 
@@ -515,7 +526,7 @@ Concurrent bridge instances targeting the same site can cause session loss. Use 
 
 - Node.js >= 18
 - WordPress 6.9+ with [Mycelium for WordPress](https://github.com/Wicked-Evolutions/Mycelium-for-WordPress) for the paired setup
-- Or, for the legacy standalone alternative only, [Abilities for AI](https://community.wickedevolutions.com/item/abilities-for-ai/) and [Abilities MCP Adapter](https://github.com/Wicked-Evolutions/abilities-mcp-adapter)
+- Existing legacy standalone installations: see [legacy setup notes](https://github.com/Wicked-Evolutions/abilities-mcp/blob/main/docs/legacy-setup.md)
 - Application Passwords enabled (default in WordPress 5.6+) only for the App Password bundle/baseline and App Password paths; OAuth uses the site OAuth flow
 
 ## MCPB maintainer build
@@ -545,10 +556,6 @@ ancestor-scoped security overrides: Zod `4.6.7` and tmp `0.2.7`. MCPB declares
 the former's original Zod 3 range, so pack/validate compatibility is verified
 locally before using the override. Revisit and remove these narrow overrides
 when upstream MCPB supports patched dependencies directly.
-
-## Evolving Knowledge
-
-We continuously add knowledge docs, skills, and agent patterns to [knowledge.wickedevolutions.com](https://knowledge.wickedevolutions.com).
 
 ## License
 

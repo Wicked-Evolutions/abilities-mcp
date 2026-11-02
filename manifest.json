@@ -2,10 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.3.schema.json",
   "manifest_version": "0.3",
   "name": "abilities-mcp",
-  "display_name": "WordPress (Abilities MCP)",
+  "display_name": "Mycelium Abilities MCP for WordPress",
   "version": "1.7.0",
-  "description": "Connect AI clients to WordPress through the Abilities API. One-click bridge to your site's content, users, plugins, and Fluent ecosystem.",
-  "long_description": "Abilities MCP is the open-source bridge that turns a WordPress site into a first-class MCP server. This bundle uses a WordPress URL, username and Application Password for its App Password baseline, then can be upgraded to OAuth. Your AI client gets typed access to the abilities that the site exposes.\n\nUse Mycelium for WordPress as the paired site setup. The legacy standalone alternative requires both `abilities-mcp-adapter` and `abilities-for-ai`; use that pair instead of, not alongside, Mycelium. The WordPress component exposes the MCP endpoint; this bundle is the client-side bridge running on your machine.",
+  "description": "Connect an AI client to a governed Mycelium for WordPress site through MCP.",
+  "long_description": "Mycelium Abilities MCP for WordPress is the local bridge between an AI client and Mycelium for WordPress. Mycelium runs on the WordPress site and governs its registered abilities; this bundle runs in the AI-client environment and routes calls to them.\n\nThis MCPB bundle uses a WordPress URL, username, and Application Password as its required baseline. For OAuth or multi-site connections, install the CLI and use its OAuth setup commands. The bundle does not add permissions: the WordPress user, Mycelium policy, and OAuth scopes remain authoritative.",
   "author": {
     "name": "Wicked Evolutions",
     "url": "https://wickedevolutions.com"
